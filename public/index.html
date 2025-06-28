@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>집합건물 세대별 정보 서비스</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+            color: white;
+            padding: 2rem;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+            font-weight: 300;
+        }
+        
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+        
+        .main-content {
+            padding: 2rem;
+        }
+        
+        .status-card {
+            background: #f8f9fa;
+            border-left: 4px solid #4CAF50;
+            padding: 1.5rem;
+            margin: 2rem 0;
+            border-radius: 8px;
+        }
+        
+        .status-card h3 {
+            color: #4CAF50;
+            margin-bottom: 1rem;
+        }
+        
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            margin: 2rem 0;
+        }
+        
+        .feature-card {
+            background: #fff;
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 1.5rem;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        
+        .feature-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+        }
+        
+        .feature-card h4 {
+            color: #333;
+            margin-bottom: 1rem;
+            font-size: 1.2rem;
+        }
+        
+        .feature-card ul {
+            list-style: none;
+            padding-left: 0;
+        }
+        
+        .feature-card li {
+            padding: 0.5rem 0;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        
+        .feature-card li:last-child {
+            border-bottom: none;
+        }
+        
+        .feature-card li::before {
+            content: "✓";
+            color: #4CAF50;
+            font-weight: bold;
+            margin-right: 0.5rem;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 1rem;
+            margin: 2rem 0;
+            flex-wrap: wrap;
+        }
+        
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 25px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+            text-align: center;
+            min-width: 150px;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+            color: white;
+        }
+        
+        .btn-secondary {
+            background: linear-gradient(135deg, #2196F3 0%, #0b7dda 100%);
+            color: white;
+        }
+        
+        .btn-warning {
+            background: linear-gradient(135deg, #FF9800 0%, #e68900 100%);
+            color: white;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin: 2rem 0;
+        }
+        
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1.5rem;
+            border-radius: 10px;
+            text-align: center;
+        }
+        
+        .stat-number {
+            font-size: 2rem;
+            font-weight: bold;
+            margin-bottom: 0.5rem;
+        }
+        
+        .stat-label {
+            font-size: 0.9rem;
+            opacity: 0.9;
+        }
+        
+        .logs-section {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 1.5rem;
+            margin: 2rem 0;
+        }
+        
+        .logs-section h4 {
+            margin-bottom: 1rem;
+            color: #333;
+        }
+        
+        #logs {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 1rem;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+            max-height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+        
+        .footer {
+            background: #333;
+            color: white;
+            text-align: center;
+            padding: 1rem;
+        }
+        
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .button-group {
+                flex-direction: column;
+            }
+            
+            .btn {
+                width: 100%;
+            }
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 1rem;
+        }
+        
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #4CAF50;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1rem;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🏢 집합건물 세대별 정보 서비스</h1>
+            <p>아파트, 오피스텔 등 집합건물의 개별 세대 정보를 자동으로 수집하고 관리합니다</p>
+        </div>
+        
+        <div class="main-content">
+            <div class="status-card">
+                <h3>🟢 서비스 상태</h3>
+                <p id="status">서비스가 정상적으로 실행 중입니다.</p>
+                <p><strong>현재 시간:</strong> <span id="current-time"></span></p>
+            </div>
+            
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <h4>📋 수집 정보</h4>
+                    <ul>
+                        <li>전용면적 및 공용면적</li>
+                        <li>공급면적 계산</li>
+                        <li>대지면적 및 건축면적</li>
+                        <li>용적률 및 건폐율</li>
+                        <li>건물 높이 및 층수</li>
+                        <li>주구조 및 지붕 재료</li>
+                        <li>주용도 및 기타용도</li>
+                        <li>승강기 및 주차대수</li>
+                        <li>사용승인일</li>
+                        <li>용도지역</li>
+                    </ul>
+                </div>
+                
+                <div class="feature-card">
+                    <h4>⚙️ 주요 기능</h4>
+                    <ul>
+                        <li>Airtable 연동</li>
+                        <li>공공데이터포털 API 활용</li>
+                        <li>실시간 자동 처리</li>
+                        <li>매분 단위 작업 확인</li>
+                        <li>개별 세대별 상세 정보</li>
+                        <li>전유/공용 면적 자동 계산</li>
+                        <li>오류 로깅 및 추적</li>
+                        <li>수동 작업 실행</li>
+                    </ul>
+                </div>
+                
+                <div class="feature-card">
+                    <h4>🎯 처리 대상</h4>
+                    <ul>
+                        <li>아파트 개별 세대</li>
+                        <li>오피스텔 개별 호실</li>
+                        <li>연립주택 개별 호실</li>
+                        <li>다세대주택 개별 호실</li>
+                        <li>상가 개별 호실</li>
+                        <li>기타 집합건물</li>
+                    </ul>
+                </div>
+            </div>
+            
+            <div class="button-group">
+                <button class="btn btn-primary" onclick="runJob()">작업 수동 실행</button>
+                <a href="/health" class="btn btn-secondary" target="_blank">상태 확인</a>
+                <button class="btn btn-warning" onclick="showLogs()">로그 확인</button>
+            </div>
+            
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <p>작업을 실행하고 있습니다...</p>
+            </div>
+            
+            <div class="stats-grid" id="stats" style="display: none;">
+                <div class="stat-card">
+                    <div class="stat-number" id="total-records">-</div>
+                    <div class="stat-label">총 처리 레코드</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="success-records">-</div>
+                    <div class="stat-label">성공한 레코드</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="success-rate">-</div>
+                    <div class="stat-label">성공률</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="last-run">-</div>
+                    <div class="stat-label">마지막 실행</div>
+                </div>
+            </div>
+            
+            <div class="logs-section" id="logs-section" style="display: none;">
+                <h4>📝 실행 로그</h4>
+                <div id="logs">로그를 불러오는 중...</div>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>&copy; 2025 GoldenRabbit. 집합건물 세대별 정보 서비스 v1.0.0</p>
+        </div>
+    </div>
+    
+    <script>
+        // 현재 시간 업데이트
+        function updateTime() {
+            const now = new Date();
+            document.getElementById('current-time').textContent = now.toLocaleString('ko-KR');
+        }
+        
+        // 페이지 로드 시 시간 설정 및 1초마다 업데이트
+        updateTime();
+        setInterval(updateTime, 1000);
+        
+        // 작업 수동 실행
+        async function runJob() {
+            const loading = document.getElementById('loading');
+            const stats = document.getElementById('stats');
+            
+            loading.style.display = 'block';
+            stats.style.display = 'none';
+            
+            try {
+                const response = await fetch('/run-job');
+                const data = await response.json();
+                
+                if (response.ok) {
+                    // 성공 시 통계 표시
+                    document.getElementById('total-records').textContent = data.result.total || 0;
+                    document.getElementById('success-records').textContent = data.result.success || 0;
+                    
+                    const successRate = data.result.total > 0 
+                        ? Math.round((data.result.success / data.result.total) * 100)
+                        : 0;
+                    document.getElementById('success-rate').textContent = successRate + '%';
+                    document.getElementById('last-run').textContent = new Date().toLocaleTimeString('ko-KR');
+                    
+                    stats.style.display = 'grid';
+                    alert('작업이 성공적으로 완료되었습니다!');
+                } else {
+                    alert('작업 실행 중 오류가 발생했습니다: ' + data.error);
+                }
+            } catch (error) {
+                alert('작업 실행 중 오류가 발생했습니다: ' + error.message);
+            } finally {
+                loading.style.display = 'none';
+            }
+        }
+        
+        // 로그 표시/숨기기
+        function showLogs() {
+            const logsSection = document.getElementById('logs-section');
+            const logs = document.getElementById('logs');
+            
+            if (logsSection.style.display === 'none') {
+                logsSection.style.display = 'block';
+                logs.textContent = '실제 로그 기능은 서버 로그 파일을 통해 확인할 수 있습니다.\n\n명령어:\ncd /home/multi-unit-building-service\npm2 logs multi-unit-building-service\n\n또는\ntail -f logs/$(date +%Y-%m-%d).log';
+            } else {
+                logsSection.style.display = 'none';
+            }
+        }
+        
+        // 상태 확인
+        async function checkStatus() {
+            try {
+                const response = await fetch('/health');
+                const data = await response.json();
+                
+                if (response.ok) {
+                    document.getElementById('status').innerHTML = 
+                        '🟢 서비스가 정상적으로 실행 중입니다.<br>' +
+                        '<small>서비스: ' + data.service + ' | 버전: ' + data.version + '</small>';
+                } else {
+                    document.getElementById('status').textContent = '🔴 서비스 상태를 확인할 수 없습니다.';
+                }
+            } catch (error) {
+                document.getElementById('status').textContent = '🔴 서비스에 연결할 수 없습니다.';
+            }
+        }
+        
+        // 페이지 로드 시 상태 확인
+        checkStatus();
+        
+        // 5분마다 상태 확인
+        setInterval(checkStatus, 5 * 60 * 1000);
+    </script>
+</body>
+</html>
