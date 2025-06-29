@@ -538,6 +538,23 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharac
         const 승강기수2 = parseInt(matchingDong.emgenUseElvtCnt) || 0;
         const 총승강기수 = 승강기수1 + 승강기수2;
         if (총승강기수 > 0) result["해당동 승강기수"] = 총승강기수;
+        
+        // 해당 동의 사용승인일 (총괄표제부보다 우선)
+        if (matchingDong.useAprDay) {
+          const 동사용승인일 = formatDateISO(matchingDong.useAprDay);
+          if (동사용승인일) result["사용승인일"] = 동사용승인일;
+        }
+      }
+    }
+    
+    // 총괄표제부가 있는 경우에도 도로명주소와 건물명은 표제부에서 가져올 수 있음
+    if (hasRecapData) {
+      const titleItems = extractItems(titleData);
+      if (titleItems.length > 0) {
+        const firstTitle = titleItems[0];
+        if (firstTitle.newPlatPlc && !result["도로명주소"]) {
+          result["도로명주소"] = firstTitle.newPlatPlc;
+        }
       }
     }
     
@@ -551,10 +568,23 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharac
       
       // 1. 표제부에서 모든 정보 (면적/비율/수량은 숫자로 처리)
       if (mainInfo.newPlatPlc) result["도로명주소"] = mainInfo.newPlatPlc;
+      if (mainInfo.bldNm) result["건물명"] = mainInfo.bldNm;
       if (mainInfo.heit) result["높이(m)"] = parseFloat(mainInfo.heit);
       if (mainInfo.strctCdNm) result["주구조"] = mainInfo.strctCdNm;
       if (mainInfo.roofCdNm) result["지붕"] = mainInfo.roofCdNm;
       if (mainInfo.mainPurpsCdNm) result["주용도"] = mainInfo.mainPurpsCdNm;
+      
+      // 총괄표제부가 없는 경우 표제부 정보를 총괄 필드에도 매핑
+      if (mainInfo.platArea) result["대지면적(㎡)"] = parseFloat(mainInfo.platArea);
+      if (mainInfo.totArea) result["연면적(㎡)"] = parseFloat(mainInfo.totArea);
+      if (mainInfo.vlRatEstmTotArea) result["용적률산정용연면적(㎡)"] = parseFloat(mainInfo.vlRatEstmTotArea);
+      if (mainInfo.archArea) result["건축면적(㎡)"] = parseFloat(mainInfo.archArea);
+      if (mainInfo.bcRat) result["건폐율(%)"] = parseFloat(mainInfo.bcRat);
+      if (mainInfo.vlRat) result["용적률(%)"] = parseFloat(mainInfo.vlRat);
+      if (mainInfo.useAprDay) {
+        const 사용승인일 = formatDateISO(mainInfo.useAprDay);
+        if (사용승인일) result["사용승인일"] = 사용승인일;
+      }
       
       // 총층수를 -지하층수/지상층수 형태로 변환
       const 지상층수 = mainInfo.grndFlrCnt || '0';
@@ -565,6 +595,7 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharac
       const 가구수 = mainInfo.fmlyCnt || '0';
       const 호수 = mainInfo.hoCnt || '0';
       result["해당동 세대/가구/호"] = `${세대수}/${가구수}/${호수}`;
+      result["총 세대/가구/호"] = `${세대수}/${가구수}/${호수}`; // 총괄 정보도 동일하게 설정
       
       const 주차1 = parseInt(mainInfo.indrMechUtcnt) || 0;
       const 주차2 = parseInt(mainInfo.oudrMechUtcnt) || 0;
@@ -577,6 +608,9 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharac
       const 승강기수2 = parseInt(mainInfo.emgenUseElvtCnt) || 0;
       const 총승강기수 = 승강기수1 + 승강기수2;
       if (총승강기수 > 0) result["해당동 승강기수"] = 총승강기수;
+      
+      // 빌라/다세대는 보통 주건물수가 1개
+      result["주건물수"] = 1;
     }
   }
   
@@ -863,7 +897,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     service: 'multi-unit-building-service',
     timestamp: new Date().toISOString(),
-    version: '3.4.0',
+    version: '3.5.0',
     viewId: MULTI_UNIT_VIEW
   });
 });
@@ -979,7 +1013,7 @@ app.get('/', (req, res) => {
   res.send(`
     <html>
     <head>
-        <title>집합건물 서비스 관리 v3.4</title>
+        <title>집합건물 서비스 관리 v3.5</title>
         <style>
             body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
             .button { display: inline-block; padding: 10px 20px; margin: 10px; 
@@ -992,7 +1026,7 @@ app.get('/', (req, res) => {
         </style>
     </head>
     <body>
-        <h1>🏗️ 집합건물 서비스 관리 v3.4</h1>
+        <h1>🏗️ 집합건물 서비스 관리 v3.5</h1>
         
         <div class="info">
             <h3>📋 현재 설정</h3>
@@ -1002,12 +1036,12 @@ app.get('/', (req, res) => {
         </div>
 
         <div class="fix">
-            <h3>🔧 v3.4 속도 최적화 + VWorld 디버깅</h3>
+            <h3>🔧 v3.5 필드 누락 문제 해결</h3>
             <ul>
-                <li><strong>병렬 처리 확대:</strong> 모든 API를 동시 호출로 3-4배 속도 향상</li>
-                <li><strong>API 지연시간 단축:</strong> 2000ms → 800ms</li>
-                <li><strong>VWorld 디버깅 강화:</strong> 상세 로그로 문제점 파악 가능</li>
-                <li><strong>처리 시간 측정:</strong> 각 단계별 소요 시간 표시</li>
+                <li><strong>빌라/다세대 필드 보완:</strong> 누락된 면적/비율 필드 추가</li>
+                <li><strong>총괄 정보 매핑:</strong> 표제부 정보를 총괄 필드에 매핑</li>
+                <li><strong>도로명주소 보완:</strong> 아파트에서도 표제부에서 추가 수집</li>
+                <li><strong>26개 전체 필드:</strong> 모든 필수 필드 완전 커버</li>
             </ul>
         </div>
 
@@ -1041,7 +1075,7 @@ app.get('/', (req, res) => {
 
 // 서버 시작
 app.listen(PORT, () => {
-  logger.info('🚀 집합건물 서비스 v3.3 시작됨');
+  logger.info('🚀 집합건물 서비스 v3.5 시작됨');
   logger.info(`📡 포트: ${PORT}`);
   logger.info(`🌐 웹 인터페이스: http://localhost:${PORT}`);
   logger.info(`📋 사용 뷰: ${MULTI_UNIT_VIEW}`);
