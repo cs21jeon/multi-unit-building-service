@@ -1,4 +1,4 @@
-require('dotenv').config({ path: '/root/goldenrabbit/.env' });
+logger.info('🚀 집합건물 서비스 v3.3 시작됨');require('dotenv').config({ path: '/root/goldenrabbit/.env' });
 const express = require('express');
 const cron = require('node-cron');
 const axios = require('axios');
@@ -369,21 +369,50 @@ const extractItems = (data) => {
   return Array.isArray(items) ? items : [items];
 };
 
+// 동/호수 매칭을 위한 정규화 함수
+const normalizeDongHo = (value) => {
+  if (!value || typeof value !== 'string') return '';
+  
+  // 숫자만 추출 (102동 -> 102, 1003호 -> 1003)
+  const numbers = value.replace(/[^0-9]/g, '');
+  return numbers;
+};
+
+// 동/호수 매칭 함수 개선
+const isDongMatch = (apiDong, inputDong) => {
+  if (!inputDong || inputDong.trim() === '') return true; // 입력 동이 없으면 매칭
+  
+  const normalizedInput = normalizeDongHo(inputDong);
+  const normalizedApi = normalizeDongHo(apiDong || '');
+  
+  // 정규화된 숫자가 일치하면 매칭
+  return normalizedInput === normalizedApi;
+};
+
+const isHoMatch = (apiHo, inputHo) => {
+  if (!inputHo) return false;
+  
+  const normalizedInput = normalizeDongHo(inputHo);
+  const normalizedApi = normalizeDongHo(apiHo || '');
+  
+  return normalizedInput === normalizedApi;
+};
+
 const findMgmBldrgstPk = (exposData, dongNm, hoNm) => {
   const items = extractItems(exposData);
   
   for (const item of items) {
     if (dongNm && dongNm.trim()) {
       // 동이 있는 경우: 동과 호수가 일치하고 주건축물+전유인 경우
-      if (item.dongNm === dongNm.trim() && 
-          item.hoNm === hoNm &&
+      if (isDongMatch(item.dongNm, dongNm) && 
+          isHoMatch(item.hoNm, hoNm) &&
           item.mainAtchGbCdNm === "주건축물" && 
           item.exposPubuseGbCdNm === "전유") {
         return item.mgmBldrgstPk;
       }
     } else {
       // 동이 없는 경우: 호수만 일치하는 경우
-      if (item.hoNm === hoNm && 
+      if (isHoMatch(item.hoNm, hoNm) && 
           item.mainAtchGbCdNm === "주건축물" && 
           item.exposPubuseGbCdNm === "전유") {
         return item.mgmBldrgstPk;
@@ -408,15 +437,15 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharac
     if (recapItems.length > 0) {
       const recap = recapItems[0];
       
-      // 1. 총괄표제부에서 기본 정보 (모든 값을 문자열로 처리)
-      if (recap.platArea) result["대지면적(㎡)"] = String(recap.platArea);
-      if (recap.totArea) result["연면적(㎡)"] = String(recap.totArea);
-      if (recap.vlRatEstmTotArea) result["용적률산정용연면적(㎡)"] = String(recap.vlRatEstmTotArea);
-      if (recap.archArea) result["건축면적(㎡)"] = String(recap.archArea);
-      if (recap.bcRat) result["건폐율(%)"] = String(recap.bcRat);
-      if (recap.vlRat) result["용적률(%)"] = String(recap.vlRat);
+      // 1. 총괄표제부에서 기본 정보 (면적/비율/수량은 숫자로 처리)
+      if (recap.platArea) result["대지면적(㎡)"] = parseFloat(recap.platArea);
+      if (recap.totArea) result["연면적(㎡)"] = parseFloat(recap.totArea);
+      if (recap.vlRatEstmTotArea) result["용적률산정용연면적(㎡)"] = parseFloat(recap.vlRatEstmTotArea);
+      if (recap.archArea) result["건축면적(㎡)"] = parseFloat(recap.archArea);
+      if (recap.bcRat) result["건폐율(%)"] = parseFloat(recap.bcRat);
+      if (recap.vlRat) result["용적률(%)"] = parseFloat(recap.vlRat);
       if (recap.bldNm) result["건물명"] = recap.bldNm;
-      if (recap.totPkngCnt) result["총주차대수"] = String(recap.totPkngCnt);
+      if (recap.totPkngCnt) result["총주차대수"] = parseInt(recap.totPkngCnt);
       if (recap.useAprDay) result["사용승인일"] = formatDateISO(recap.useAprDay);
       
       const 총세대수 = recap.hhldCnt || '0';
@@ -424,22 +453,22 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharac
       const 총호수 = recap.hoCnt || '0';
       result["총 세대/가구/호"] = `${총세대수}/${총가구수}/${총호수}`;
       
-      if (recap.mainBldCnt) result["주건물수"] = String(recap.mainBldCnt);
+      if (recap.mainBldCnt) result["주건물수"] = parseInt(recap.mainBldCnt);
     }
     
-    // 2. 표제부에서 해당 동 정보
+    // 2. 표제부에서 해당 동 정보 (동 매칭 로직 개선)
     const titleItems = extractItems(titleData);
     if (titleItems.length > 0) {
       let matchingDong = null;
       
       if (dongNm && dongNm.trim()) {
-        matchingDong = titleItems.find(item => item.dongNm && item.dongNm.trim() === dongNm.trim());
+        matchingDong = titleItems.find(item => isDongMatch(item.dongNm, dongNm));
       } else {
         matchingDong = titleItems.find(item => item.mainAtchGbCdNm === "주건축물");
       }
       
       if (matchingDong) {
-        if (matchingDong.heit) result["높이(m)"] = String(matchingDong.heit);
+        if (matchingDong.heit) result["높이(m)"] = parseFloat(matchingDong.heit);
         if (matchingDong.strctCdNm) result["주구조"] = matchingDong.strctCdNm;
         if (matchingDong.roofCdNm) result["지붕"] = matchingDong.roofCdNm;
         if (matchingDong.mainPurpsCdNm) result["주용도"] = matchingDong.mainPurpsCdNm;
@@ -457,7 +486,7 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharac
         const 승강기수1 = parseInt(matchingDong.rideUseElvtCnt) || 0;
         const 승강기수2 = parseInt(matchingDong.emgenUseElvtCnt) || 0;
         const 총승강기수 = 승강기수1 + 승강기수2;
-        if (총승강기수 > 0) result["해당동 승강기수"] = String(총승강기수);
+        if (총승강기수 > 0) result["해당동 승강기수"] = 총승강기수;
       }
     }
     
@@ -469,9 +498,9 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharac
     if (titleItems.length > 0) {
       const mainInfo = titleItems[0];
       
-      // 1. 표제부에서 모든 정보 (모든 값을 문자열로 처리)
+      // 1. 표제부에서 모든 정보 (면적/비율/수량은 숫자로 처리)
       if (mainInfo.newPlatPlc) result["도로명주소"] = mainInfo.newPlatPlc;
-      if (mainInfo.heit) result["높이(m)"] = String(mainInfo.heit);
+      if (mainInfo.heit) result["높이(m)"] = parseFloat(mainInfo.heit);
       if (mainInfo.strctCdNm) result["주구조"] = mainInfo.strctCdNm;
       if (mainInfo.roofCdNm) result["지붕"] = mainInfo.roofCdNm;
       if (mainInfo.mainPurpsCdNm) result["주용도"] = mainInfo.mainPurpsCdNm;
@@ -491,16 +520,16 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharac
       const 주차3 = parseInt(mainInfo.indrAutoUtcnt) || 0;
       const 주차4 = parseInt(mainInfo.oudrAutoUtcnt) || 0;
       const 총주차대수 = 주차1 + 주차2 + 주차3 + 주차4;
-      if (총주차대수 > 0) result["총주차대수"] = String(총주차대수);
+      if (총주차대수 > 0) result["총주차대수"] = 총주차대수;
       
       const 승강기수1 = parseInt(mainInfo.rideUseElvtCnt) || 0;
       const 승강기수2 = parseInt(mainInfo.emgenUseElvtCnt) || 0;
       const 총승강기수 = 승강기수1 + 승강기수2;
-      if (총승강기수 > 0) result["해당동 승강기수"] = String(총승강기수);
+      if (총승강기수 > 0) result["해당동 승강기수"] = 총승강기수;
     }
   }
   
-  // 3. 면적 정보 (공통) - 문자열로 처리
+  // 3. 면적 정보 (공통) - 숫자로 처리
   if (areaData) {
     const areaItems = extractItems(areaData);
     let 전용면적 = 0;
@@ -515,8 +544,8 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharac
       }
     });
     
-    if (전용면적 > 0) result["전용면적(㎡)"] = String(전용면적);
-    if ((전용면적 + 공용면적) > 0) result["공급면적(㎡)"] = String(전용면적 + 공용면적);
+    if (전용면적 > 0) result["전용면적(㎡)"] = 전용면적;
+    if ((전용면적 + 공용면적) > 0) result["공급면적(㎡)"] = 전용면적 + 공용면적;
   }
   
   // 4. VWorld 토지특성 정보 (용도지역, 토지면적)
@@ -525,11 +554,11 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharac
       result["용도지역"] = landCharacteristics.용도지역;
     }
     if (landCharacteristics.토지면적) {
-      result["토지면적(㎡)"] = String(landCharacteristics.토지면적);
+      result["토지면적(㎡)"] = landCharacteristics.토지면적; // 숫자로 처리
     }
   }
   
-  // 5. 주택가격 정보 (공통) - 문자열로 처리
+  // 5. 주택가격 정보 (공통) - 숫자로 처리
   if (hsprcData) {
     const hsprcItems = extractItems(hsprcData);
     if (hsprcItems.length > 0) {
@@ -542,19 +571,19 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharac
         const 주택가격원 = parseInt(latestPrice.hsprc) || 0;
         const 주택가격만원 = Math.round(주택가격원 / 10000);
         
-        result["주택가격(만원)"] = String(주택가격만원);
+        result["주택가격(만원)"] = 주택가격만원; // 숫자로 처리
         if (latestPrice.crtnDay) result["주택가격기준일"] = formatDateISO(latestPrice.crtnDay);
       }
     } else {
-      result["주택가격(만원)"] = "0";
+      result["주택가격(만원)"] = 0;
     }
   } else {
-    result["주택가격(만원)"] = "0";
+    result["주택가격(만원)"] = 0;
   }
   
-  // 6. 대지지분 정보 (공통) - 문자열로 처리
+  // 6. 대지지분 정보 (공통) - 숫자로 처리
   if (landShare !== null) {
-    result["대지지분(㎡)"] = String(landShare);
+    result["대지지분(㎡)"] = landShare; // 이미 parseFloat로 처리된 숫자
   }
   
   return result;
@@ -770,7 +799,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     service: 'multi-unit-building-service',
     timestamp: new Date().toISOString(),
-    version: '3.2.0',
+    version: '3.3.0',
     viewId: MULTI_UNIT_VIEW
   });
 });
@@ -886,7 +915,7 @@ app.get('/', (req, res) => {
   res.send(`
     <html>
     <head>
-        <title>집합건물 서비스 관리 v3.2</title>
+        <title>집합건물 서비스 관리 v3.3</title>
         <style>
             body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
             .button { display: inline-block; padding: 10px 20px; margin: 10px; 
@@ -899,7 +928,7 @@ app.get('/', (req, res) => {
         </style>
     </head>
     <body>
-        <h1>🏗️ 집합건물 서비스 관리 v3.2</h1>
+        <h1>🏗️ 집합건물 서비스 관리 v3.3</h1>
         
         <div class="info">
             <h3>📋 현재 설정</h3>
@@ -909,13 +938,12 @@ app.get('/', (req, res) => {
         </div>
 
         <div class="fix">
-            <h3>🔧 v3.2 최종 수정사항</h3>
+            <h3>🔧 v3.3 최종 수정사항</h3>
             <ul>
-                <li><strong>총층수 형식:</strong> -지하층수/지상층수 (-0/3)</li>
-                <li><strong>모든 데이터 문자열화:</strong> 숫자 필드 호환성 개선</li>
-                <li><strong>VWorld 용도지역:</strong> getLandCharacteristics API 사용</li>
-                <li><strong>토지면적 추가:</strong> 새로운 필드 매핑</li>
-                <li><strong>구문 오류 수정:</strong> 안정성 강화</li>
+                <li><strong>데이터 타입 최적화:</strong> 면적/비율/수량 필드를 숫자로 처리</li>
+                <li><strong>동/호수 매칭 개선:</strong> "102동"↔"102", "1003호"↔"1003" 자동 매칭</li>
+                <li><strong>숫자 필드:</strong> 면적, 건폐율, 용적률, 높이, 주차대수, 승강기수, 주택가격</li>
+                <li><strong>문자 필드:</strong> 총층수(-0/3), 세대/가구/호, 용도지역, 주소 등</li>
             </ul>
         </div>
 
@@ -949,7 +977,7 @@ app.get('/', (req, res) => {
 
 // 서버 시작
 app.listen(PORT, () => {
-  logger.info('🚀 집합건물 서비스 v3.2 시작됨');
+  logger.info('🚀 집합건물 서비스 v3.3 시작됨');
   logger.info(`📡 포트: ${PORT}`);
   logger.info(`🌐 웹 인터페이스: http://localhost:${PORT}`);
   logger.info(`📋 사용 뷰: ${MULTI_UNIT_VIEW}`);
