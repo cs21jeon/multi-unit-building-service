@@ -170,7 +170,7 @@ const getBuildingRecapInfo = async (codeData) => {
   }
 };
 
-const getBuildingTitleInfo = async (codeData, dongNm = null) => {
+const getBuildingTitleInfo = async (codeData) => {
   try {
     await delay(API_DELAY);
     
@@ -218,31 +218,6 @@ const getBuildingAreaInfo = async (codeData, dongNm, hoNm) => {
     return response.data;
   } catch (error) {
     logger.error('getBuildingAreaInfo 실패:', error.message);
-    return null;
-  }
-};
-
-const getBuildingJijiguInfo = async (codeData) => {
-  try {
-    await delay(API_DELAY);
-    
-    const response = await axios.get('https://apis.data.go.kr/1613000/BldRgstHubService/getBrJijiguInfo', {
-      params: {
-        serviceKey: PUBLIC_API_KEY,
-        sigunguCd: codeData.시군구코드,
-        bjdongCd: codeData.법정동코드,
-        bun: codeData.번,
-        ji: codeData.지,
-        _type: 'json',
-        numOfRows: 10,
-        pageNo: 1
-      },
-      timeout: 30000
-    });
-
-    return response.data;
-  } catch (error) {
-    logger.error('getBuildingJijiguInfo 실패:', error.message);
     return null;
   }
 };
@@ -300,6 +275,48 @@ const getBuildingHsprcInfo = async (codeData, mgmBldrgstPk) => {
   }
 };
 
+// VWorld API를 사용한 토지특성 정보 조회 (용도지역, 토지면적)
+const getLandCharacteristics = async (pnu) => {
+  try {
+    await delay(API_DELAY);
+    
+    const response = await axios.get('https://api.vworld.kr/ned/data/getLandCharacteristics', {
+      params: {
+        key: VWORLD_APIKEY,
+        domain: 'localhost',
+        pnu: pnu,
+        stdrYear: '2024',
+        format: 'xml',
+        numOfRows: 10,
+        pageNo: 1
+      },
+      timeout: 30000
+    });
+
+    const jsonData = convert.xml2js(response.data, { compact: true, spaces: 2, textKey: '_text' });
+    
+    if (jsonData && jsonData.response && jsonData.response.fields && jsonData.response.fields.field) {
+      let fields = jsonData.response.fields.field;
+      if (!Array.isArray(fields)) fields = [fields];
+      
+      if (fields.length > 0) {
+        const field = fields[0];
+        
+        return {
+          용도지역: field.prposArea1Nm && field.prposArea1Nm._text ? field.prposArea1Nm._text : null,
+          토지면적: field.lndpclAr && field.lndpclAr._text ? parseFloat(field.lndpclAr._text) : null
+        };
+      }
+    }
+    
+    return { 용도지역: null, 토지면적: null };
+  } catch (error) {
+    logger.error('getLandCharacteristics 실패:', error.message);
+    return { 용도지역: null, 토지면적: null };
+  }
+};
+
+// VWorld API를 사용한 대지지분 정보 조회
 const getLandShareInfo = async (pnu, dongNm, hoNm) => {
   try {
     await delay(API_DELAY);
@@ -320,7 +337,7 @@ const getLandShareInfo = async (pnu, dongNm, hoNm) => {
 
     const jsonData = convert.xml2js(response.data, { compact: true, spaces: 2, textKey: '_text' });
     
-    if (jsonData?.response?.fields?.field) {
+    if (jsonData && jsonData.response && jsonData.response.fields && jsonData.response.fields.field) {
       let fields = jsonData.response.fields.field;
       if (!Array.isArray(fields)) fields = [fields];
       
@@ -344,7 +361,9 @@ const getLandShareInfo = async (pnu, dongNm, hoNm) => {
 
 // 데이터 처리 함수들
 const extractItems = (data) => {
-  if (!data?.response?.body?.items?.item) return [];
+  if (!data || !data.response || !data.response.body || !data.response.body.items || !data.response.body.items.item) {
+    return [];
+  }
   
   const items = data.response.body.items.item;
   return Array.isArray(items) ? items : [items];
@@ -375,11 +394,11 @@ const findMgmBldrgstPk = (exposData, dongNm, hoNm) => {
   return null;
 };
 
-const processMultiUnitBuildingData = (recapData, titleData, areaData, jijiguData, hsprcData, landShare, dongNm, hoNm) => {
+const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharacteristics, hsprcData, landShare, dongNm, hoNm) => {
   const result = {};
   
   // 총괄표제부 데이터가 있는지 확인
-  const hasRecapData = recapData?.response?.body?.totalCount && parseInt(recapData.response.body.totalCount) > 0;
+  const hasRecapData = recapData && recapData.response && recapData.response.body && recapData.response.body.totalCount && parseInt(recapData.response.body.totalCount) > 0;
   
   if (hasRecapData) {
     // === getBrRecapTitleInfo가 있는 경우 ===
@@ -389,22 +408,23 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, jijiguData
     if (recapItems.length > 0) {
       const recap = recapItems[0];
       
-      // 1. 총괄표제부에서 기본 정보 (실제 필드명 사용)
-      result["대지면적(㎡)"] = parseFloat(recap.platArea) || null;
-      result["연면적(㎡)"] = parseFloat(recap.totArea) || null;
-      result["용적률산정용연면적(㎡)"] = parseFloat(recap.vlRatEstmTotArea) || null;
-      result["건축면적(㎡)"] = parseFloat(recap.archArea) || null;
-      result["건폐율(%)"] = parseFloat(recap.bcRat) || null;
-      result["용적률(%)"] = parseFloat(recap.vlRat) || null;
-      result["건물명"] = recap.bldNm || null;
-      result["총주차대수"] = parseInt(recap.totPkngCnt) || null;
-      result["사용승인일"] = formatDateISO(recap.useAprDay);
+      // 1. 총괄표제부에서 기본 정보 (모든 값을 문자열로 처리)
+      if (recap.platArea) result["대지면적(㎡)"] = String(recap.platArea);
+      if (recap.totArea) result["연면적(㎡)"] = String(recap.totArea);
+      if (recap.vlRatEstmTotArea) result["용적률산정용연면적(㎡)"] = String(recap.vlRatEstmTotArea);
+      if (recap.archArea) result["건축면적(㎡)"] = String(recap.archArea);
+      if (recap.bcRat) result["건폐율(%)"] = String(recap.bcRat);
+      if (recap.vlRat) result["용적률(%)"] = String(recap.vlRat);
+      if (recap.bldNm) result["건물명"] = recap.bldNm;
+      if (recap.totPkngCnt) result["총주차대수"] = String(recap.totPkngCnt);
+      if (recap.useAprDay) result["사용승인일"] = formatDateISO(recap.useAprDay);
       
-      const 총세대수 = parseInt(recap.hhldCnt) || 0;
-      const 총가구수 = parseInt(recap.fmlyCnt) || 0;
-      const 총호수 = parseInt(recap.hoCnt) || 0;
+      const 총세대수 = recap.hhldCnt || '0';
+      const 총가구수 = recap.fmlyCnt || '0';
+      const 총호수 = recap.hoCnt || '0';
       result["총 세대/가구/호"] = `${총세대수}/${총가구수}/${총호수}`;
-      result["주건물수"] = parseInt(recap.mainBldCnt) || null;
+      
+      if (recap.mainBldCnt) result["주건물수"] = String(recap.mainBldCnt);
     }
     
     // 2. 표제부에서 해당 동 정보
@@ -419,19 +439,25 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, jijiguData
       }
       
       if (matchingDong) {
-        result["높이(m)"] = parseFloat(matchingDong.heit) || null;
-        result["주구조"] = matchingDong.strctCdNm || null;
-        result["지붕"] = matchingDong.roofCdNm || null;
-        result["주용도"] = matchingDong.mainPurpsCdNm || null;
-        result["총층수"] = parseInt(matchingDong.grndFlrCnt) || null; // "해당동 총층수" -> "총층수"
+        if (matchingDong.heit) result["높이(m)"] = String(matchingDong.heit);
+        if (matchingDong.strctCdNm) result["주구조"] = matchingDong.strctCdNm;
+        if (matchingDong.roofCdNm) result["지붕"] = matchingDong.roofCdNm;
+        if (matchingDong.mainPurpsCdNm) result["주용도"] = matchingDong.mainPurpsCdNm;
         
-        const 해당동세대수 = parseInt(matchingDong.hhldCnt) || 0;
-        const 해당동가구수 = parseInt(matchingDong.fmlyCnt) || 0;
-        const 해당동호수 = parseInt(matchingDong.hoCnt) || 0;
+        // 총층수를 -지하층수/지상층수 형태로 변환
+        const 지상층수 = matchingDong.grndFlrCnt || '0';
+        const 지하층수 = matchingDong.ugrndFlrCnt || '0';
+        result["총층수"] = `-${지하층수}/${지상층수}`;
+        
+        const 해당동세대수 = matchingDong.hhldCnt || '0';
+        const 해당동가구수 = matchingDong.fmlyCnt || '0';
+        const 해당동호수 = matchingDong.hoCnt || '0';
         result["해당동 세대/가구/호"] = `${해당동세대수}/${해당동가구수}/${해당동호수}`;
         
-        const 승강기수 = (parseInt(matchingDong.rideUseElvtCnt) || 0) + (parseInt(matchingDong.emgenUseElvtCnt) || 0);
-        result["해당동 승강기수"] = 승강기수 > 0 ? 승강기수 : null;
+        const 승강기수1 = parseInt(matchingDong.rideUseElvtCnt) || 0;
+        const 승강기수2 = parseInt(matchingDong.emgenUseElvtCnt) || 0;
+        const 총승강기수 = 승강기수1 + 승강기수2;
+        if (총승강기수 > 0) result["해당동 승강기수"] = String(총승강기수);
       }
     }
     
@@ -443,31 +469,38 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, jijiguData
     if (titleItems.length > 0) {
       const mainInfo = titleItems[0];
       
-      // 1. 표제부에서 모든 정보
-      result["도로명주소"] = mainInfo.newPlatPlc || null;
-      result["높이(m)"] = parseFloat(mainInfo.heit) || null;
-      result["주구조"] = mainInfo.strctCdNm || null;
-      result["지붕"] = mainInfo.roofCdNm || null;
-      result["주용도"] = mainInfo.mainPurpsCdNm || null;
-      result["총층수"] = parseInt(mainInfo.grndFlrCnt) || null; // "해당동 총층수" -> "총층수"
+      // 1. 표제부에서 모든 정보 (모든 값을 문자열로 처리)
+      if (mainInfo.newPlatPlc) result["도로명주소"] = mainInfo.newPlatPlc;
+      if (mainInfo.heit) result["높이(m)"] = String(mainInfo.heit);
+      if (mainInfo.strctCdNm) result["주구조"] = mainInfo.strctCdNm;
+      if (mainInfo.roofCdNm) result["지붕"] = mainInfo.roofCdNm;
+      if (mainInfo.mainPurpsCdNm) result["주용도"] = mainInfo.mainPurpsCdNm;
       
-      const 세대수 = parseInt(mainInfo.hhldCnt) || 0;
-      const 가구수 = parseInt(mainInfo.fmlyCnt) || 0;
-      const 호수 = parseInt(mainInfo.hoCnt) || 0;
+      // 총층수를 -지하층수/지상층수 형태로 변환
+      const 지상층수 = mainInfo.grndFlrCnt || '0';
+      const 지하층수 = mainInfo.ugrndFlrCnt || '0';
+      result["총층수"] = `-${지하층수}/${지상층수}`;
+      
+      const 세대수 = mainInfo.hhldCnt || '0';
+      const 가구수 = mainInfo.fmlyCnt || '0';
+      const 호수 = mainInfo.hoCnt || '0';
       result["해당동 세대/가구/호"] = `${세대수}/${가구수}/${호수}`;
       
-      const 주차대수 = (parseInt(mainInfo.indrMechUtcnt) || 0) + 
-                     (parseInt(mainInfo.oudrMechUtcnt) || 0) + 
-                     (parseInt(mainInfo.indrAutoUtcnt) || 0) + 
-                     (parseInt(mainInfo.oudrAutoUtcnt) || 0);
-      result["총주차대수"] = 주차대수 > 0 ? 주차대수 : null;
+      const 주차1 = parseInt(mainInfo.indrMechUtcnt) || 0;
+      const 주차2 = parseInt(mainInfo.oudrMechUtcnt) || 0;
+      const 주차3 = parseInt(mainInfo.indrAutoUtcnt) || 0;
+      const 주차4 = parseInt(mainInfo.oudrAutoUtcnt) || 0;
+      const 총주차대수 = 주차1 + 주차2 + 주차3 + 주차4;
+      if (총주차대수 > 0) result["총주차대수"] = String(총주차대수);
       
-      const 승강기수 = (parseInt(mainInfo.rideUseElvtCnt) || 0) + (parseInt(mainInfo.emgenUseElvtCnt) || 0);
-      result["해당동 승강기수"] = 승강기수 > 0 ? 승강기수 : null;
+      const 승강기수1 = parseInt(mainInfo.rideUseElvtCnt) || 0;
+      const 승강기수2 = parseInt(mainInfo.emgenUseElvtCnt) || 0;
+      const 총승강기수 = 승강기수1 + 승강기수2;
+      if (총승강기수 > 0) result["해당동 승강기수"] = String(총승강기수);
     }
   }
   
-  // 3. 면적 정보 (공통)
+  // 3. 면적 정보 (공통) - 문자열로 처리
   if (areaData) {
     const areaItems = extractItems(areaData);
     let 전용면적 = 0;
@@ -482,23 +515,21 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, jijiguData
       }
     });
     
-    result["전용면적(㎡)"] = 전용면적 > 0 ? 전용면적 : null;
-    result["공급면적(㎡)"] = (전용면적 + 공용면적) > 0 ? (전용면적 + 공용면적) : null;
+    if (전용면적 > 0) result["전용면적(㎡)"] = String(전용면적);
+    if ((전용면적 + 공용면적) > 0) result["공급면적(㎡)"] = String(전용면적 + 공용면적);
   }
   
-  // 4. 지구지역 정보 (공통) - 필드명 수정
-  if (jijiguData) {
-    const jijiguItems = extractItems(jijiguData);
-    if (jijiguItems.length > 0 && jijiguItems[0].jijiguGbCdNm) {
-      // "용도지역"이 select 필드인 경우, 기존 옵션과 일치하는지 확인 후 입력
-      const 용도지역값 = jijiguItems[0].jijiguGbCdNm;
-      if (용도지역값 && 용도지역값.trim() !== '') {
-        result["용도지역"] = 용도지역값;
-      }
+  // 4. VWorld 토지특성 정보 (용도지역, 토지면적)
+  if (landCharacteristics) {
+    if (landCharacteristics.용도지역) {
+      result["용도지역"] = landCharacteristics.용도지역;
+    }
+    if (landCharacteristics.토지면적) {
+      result["토지면적(㎡)"] = String(landCharacteristics.토지면적);
     }
   }
   
-  // 5. 주택가격 정보 (공통)
+  // 5. 주택가격 정보 (공통) - 문자열로 처리
   if (hsprcData) {
     const hsprcItems = extractItems(hsprcData);
     if (hsprcItems.length > 0) {
@@ -511,62 +542,22 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, jijiguData
         const 주택가격원 = parseInt(latestPrice.hsprc) || 0;
         const 주택가격만원 = Math.round(주택가격원 / 10000);
         
-        result["주택가격(만원)"] = 주택가격만원 > 0 ? 주택가격만원 : 0;
-        result["주택가격기준일"] = formatDateISO(latestPrice.crtnDay);
+        result["주택가격(만원)"] = String(주택가격만원);
+        if (latestPrice.crtnDay) result["주택가격기준일"] = formatDateISO(latestPrice.crtnDay);
       }
     } else {
-      result["주택가격(만원)"] = 0;
+      result["주택가격(만원)"] = "0";
     }
   } else {
-    result["주택가격(만원)"] = 0;
+    result["주택가격(만원)"] = "0";
   }
   
-  // 6. 대지지분 정보 (공통)
+  // 6. 대지지분 정보 (공통) - 문자열로 처리
   if (landShare !== null) {
-    result["대지지분(㎡)"] = landShare;
+    result["대지지분(㎡)"] = String(landShare);
   }
   
   return result;
-};
-
-const needsProcessing = (record) => {
-  try {
-    const 지번주소 = record.get('지번 주소');
-    const 호수 = record.get('호수');
-
-    if (!지번주소 || !호수) {
-      return false;
-    }
-
-    // 실제 Airtable 필드명에 맞게 수정
-    const 검사필드목록 = [
-      '도로명주소', 
-      '전용면적(㎡)', 
-      '연면적(㎡)', 
-      '주구조', 
-      '주용도',
-      '총층수',
-      '해당동 승강기수', 
-      '총 세대/가구/호', 
-      '총주차대수',
-      '주택가격(만원)', 
-      '사용승인일', 
-      '대지지분(㎡)',
-      '용도지역'
-    ];
-
-    for (const 필드 of 검사필드목록) {
-      const 값 = record.get(필드);
-      if (!값 || 값 === '' || 값 === null || 값 === undefined) {
-        return true;
-      }
-    }
-
-    return false;
-  } catch (error) {
-    logger.error(`레코드 처리 필요성 검사 중 오류:`, error);
-    return false;
-  }
 };
 
 // 메인 처리 함수
@@ -588,20 +579,24 @@ const processMultiUnitBuildingRecord = async (record) => {
     // 2. 건축물 코드 조회
     const buildingCodes = await getBuildingCodes(parsedAddress);
     
-    // 3. PNU 생성 (대지지분 조회용)
+    // 3. PNU 생성 (VWorld API용)
     const pnu = generatePNU(buildingCodes);
 
     // 4. API 데이터 수집
     logger.info(`📡 API 데이터 수집 시작...`);
     
-    const [recapData, titleData, areaData, jijiguData, exposData, landShare] = await Promise.all([
-      getBuildingRecapInfo(buildingCodes),
-      getBuildingTitleInfo(buildingCodes, 동),
-      getBuildingAreaInfo(buildingCodes, 동, 호수),
-      getBuildingJijiguInfo(buildingCodes),
-      getBuildingExposInfo(buildingCodes, 동, 호수),
-      pnu ? getLandShareInfo(pnu, 동, 호수) : Promise.resolve(null)
-    ]);
+    const recapData = await getBuildingRecapInfo(buildingCodes);
+    const titleData = await getBuildingTitleInfo(buildingCodes);
+    const areaData = await getBuildingAreaInfo(buildingCodes, 동, 호수);
+    const exposData = await getBuildingExposInfo(buildingCodes, 동, 호수);
+    
+    let landCharacteristics = null;
+    let landShare = null;
+    
+    if (pnu) {
+      landCharacteristics = await getLandCharacteristics(pnu);
+      landShare = await getLandShareInfo(pnu, 동, 호수);
+    }
 
     // 5. mgmBldrgstPk 추출
     const mgmBldrgstPk = findMgmBldrgstPk(exposData, 동, 호수);
@@ -615,7 +610,7 @@ const processMultiUnitBuildingRecord = async (record) => {
 
     // 7. 데이터 가공
     const processedData = processMultiUnitBuildingData(
-      recapData, titleData, areaData, jijiguData, hsprcData, landShare, 동, 호수
+      recapData, titleData, areaData, landCharacteristics, hsprcData, landShare, 동, 호수
     );
 
     if (Object.keys(processedData).length === 0) {
@@ -660,18 +655,13 @@ const runMultiUnitBuildingJob = async () => {
 
     logger.info(`📋 뷰에서 ${allRecords.length}개 레코드 발견`);
 
-    // 처리가 필요한 레코드만 필터링
-    const recordsToProcess = allRecords.filter(record => needsProcessing(record));
-
-    logger.info(`🎯 처리 대상 레코드: ${recordsToProcess.length}개`);
-
-    if (recordsToProcess.length === 0) {
+    if (allRecords.length === 0) {
       logger.info('✅ 처리할 레코드가 없습니다');
       return { total: 0, success: 0 };
     }
 
-    // 레코드 정보 추출
-    const recordData = recordsToProcess.map(record => ({
+    // 뷰에서 가져온 모든 레코드를 처리
+    const recordData = allRecords.map(record => ({
       id: record.id,
       '지번 주소': record.get('지번 주소') || '',
       '동': record.get('동') || '',
@@ -730,9 +720,8 @@ cron.schedule('* * * * *', async () => {
       })
       .all();
 
-    const needsWork = sampleRecords.some(record => needsProcessing(record));
-
-    if (needsWork) {
+    // 뷰에 레코드가 있으면 작업 실행
+    if (sampleRecords.length > 0) {
       logger.info('🎯 처리할 집합건물 레코드 발견, 작업 실행 중...');
       await runMultiUnitBuildingJob();
     } else {
@@ -781,7 +770,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     service: 'multi-unit-building-service',
     timestamp: new Date().toISOString(),
-    version: '3.0.0',
+    version: '3.2.0',
     viewId: MULTI_UNIT_VIEW
   });
 });
@@ -816,16 +805,12 @@ app.get('/view-info', async (req, res) => {
       id: record.id,
       지번주소: record.get('지번 주소'),
       동: record.get('동'),
-      호수: record.get('호수'),
-      needsProcessing: needsProcessing(record)
+      호수: record.get('호수')
     }));
-
-    const needsProcessingCount = recordsInfo.filter(r => r.needsProcessing).length;
 
     res.json({
       viewId: MULTI_UNIT_VIEW,
       totalRecords: allRecords.length,
-      needsProcessing: needsProcessingCount,
       sampleRecords: recordsInfo
     });
   } catch (error) {
@@ -878,12 +863,12 @@ app.get('/api-status', async (req, res) => {
       timeout: 30000
     });
 
-    const isValid = response.data?.response?.header?.resultCode === '00';
+    const isValid = response.data && response.data.response && response.data.response.header && response.data.response.header.resultCode === '00';
 
     res.json({
       apiKeyValid: isValid,
-      responseCode: response.data?.response?.header?.resultCode,
-      responseMessage: response.data?.response?.header?.resultMsg,
+      responseCode: response.data && response.data.response && response.data.response.header ? response.data.response.header.resultCode : 'unknown',
+      responseMessage: response.data && response.data.response && response.data.response.header ? response.data.response.header.resultMsg : 'unknown',
       hasApiKey: !!PUBLIC_API_KEY,
       hasVWorldKey: !!VWORLD_APIKEY
     });
@@ -901,7 +886,7 @@ app.get('/', (req, res) => {
   res.send(`
     <html>
     <head>
-        <title>집합건물 서비스 관리 v3.0</title>
+        <title>집합건물 서비스 관리 v3.2</title>
         <style>
             body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
             .button { display: inline-block; padding: 10px 20px; margin: 10px; 
@@ -910,10 +895,11 @@ app.get('/', (req, res) => {
             .button:hover { background: #0056b3; }
             .info { background: #f8f9fa; padding: 20px; border-radius: 5px; margin: 20px 0; }
             .feature { background: #e7f3ff; padding: 15px; border-radius: 5px; margin: 10px 0; }
+            .fix { background: #d4edda; padding: 15px; border-radius: 5px; margin: 10px 0; }
         </style>
     </head>
     <body>
-        <h1>🏗️ 집합건물 서비스 관리 v3.0</h1>
+        <h1>🏗️ 집합건물 서비스 관리 v3.2</h1>
         
         <div class="info">
             <h3>📋 현재 설정</h3>
@@ -922,14 +908,14 @@ app.get('/', (req, res) => {
             <p><strong>스케줄:</strong> 1분마다 실행</p>
         </div>
 
-        <div class="feature">
-            <h3>🆕 v3.0 주요 개선사항</h3>
+        <div class="fix">
+            <h3>🔧 v3.2 최종 수정사항</h3>
             <ul>
-                <li><strong>총괄표제부 분기 처리:</strong> 아파트와 빌라/다세대 구분</li>
-                <li><strong>새로운 API 추가:</strong> getBrExposInfo, VWorld ldaregList</li>
-                <li><strong>mgmBldrgstPk 자동 추출:</strong> 동/호수 기반 매칭</li>
-                <li><strong>대지지분 정보:</strong> VWorld API 연동</li>
-                <li><strong>코드 최적화:</strong> 불필요한 부분 제거, 에러 처리 개선</li>
+                <li><strong>총층수 형식:</strong> -지하층수/지상층수 (-0/3)</li>
+                <li><strong>모든 데이터 문자열화:</strong> 숫자 필드 호환성 개선</li>
+                <li><strong>VWorld 용도지역:</strong> getLandCharacteristics API 사용</li>
+                <li><strong>토지면적 추가:</strong> 새로운 필드 매핑</li>
+                <li><strong>구문 오류 수정:</strong> 안정성 강화</li>
             </ul>
         </div>
 
@@ -940,23 +926,21 @@ app.get('/', (req, res) => {
         <a href="/run-job" class="button">수동 작업 실행</a>
 
         <h3>📊 모니터링</h3>
-        <p>로그 확인: <code>pm2 logs multi-unit-building-service</code></p>
-        <p>프로세스 상태: <code>pm2 status</code></p>
+        <p>로그 확인: <code>pm2 logs multi-unit-service</code></p>
+        <p>프로세스 상태: <code>pm2 list</code></p>
         
-        <h3>📝 처리 필드</h3>
+        <h3>🚀 서버 재시작 방법</h3>
+        <p><code>pm2 stop multi-unit-service</code></p>
+        <p><code>pm2 start multi-unit-app.js --name multi-unit-service</code></p>
+        
+        <h3>📝 처리되는 필드들</h3>
         <div class="info">
-            <p><strong>총괄표제부 있는 경우 (아파트 등):</strong></p>
-            <ul>
-                <li>총괄표제부: 대지면적, 연면적, 건축면적, 건폐율, 용적률, 건물명, 총주차대수, 사용승인일, 총 세대/가구/호, 주건물수</li>
-                <li>표제부(해당동): 높이, 주구조, 지붕, 주용도, 해당동 총층수, 해당동 세대/가구/호, 해당동 승강기수</li>
-                <li>공통: 전용면적, 공급면적, 용도지역, 주택가격, 대지지분</li>
-            </ul>
-            
-            <p><strong>총괄표제부 없는 경우 (빌라, 다세대 등):</strong></p>
-            <ul>
-                <li>표제부: 도로명주소, 높이, 주구조, 지붕, 주용도, 해당동 총층수, 해당동 세대/가구/호, 총주차대수, 해당동 승강기수</li>
-                <li>공통: 전용면적, 공급면적, 용도지역, 주택가격, 대지지분</li>
-            </ul>
+            <p><strong>기본 정보:</strong> 도로명주소, 건물명, 높이, 주구조, 지붕, 주용도</p>
+            <p><strong>면적 정보:</strong> 대지면적, 연면적, 건축면적, 전용면적, 공급면적, 토지면적</p>
+            <p><strong>비율 정보:</strong> 건폐율, 용적률</p>
+            <p><strong>세대 정보:</strong> 총 세대/가구/호, 해당동 세대/가구/호</p>
+            <p><strong>시설 정보:</strong> 총층수(-지하/지상), 총주차대수, 해당동 승강기수, 주건물수</p>
+            <p><strong>기타 정보:</strong> 사용승인일, 용도지역, 주택가격, 대지지분</p>
         </div>
     </body>
     </html>
@@ -965,7 +949,7 @@ app.get('/', (req, res) => {
 
 // 서버 시작
 app.listen(PORT, () => {
-  logger.info('🚀 집합건물 서비스 v3.0 시작됨');
+  logger.info('🚀 집합건물 서비스 v3.2 시작됨');
   logger.info(`📡 포트: ${PORT}`);
   logger.info(`🌐 웹 인터페이스: http://localhost:${PORT}`);
   logger.info(`📋 사용 뷰: ${MULTI_UNIT_VIEW}`);
