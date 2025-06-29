@@ -1,4 +1,4 @@
-logger.info('🚀 집합건물 서비스 v3.3 시작됨');require('dotenv').config({ path: '/root/goldenrabbit/.env' });
+require('dotenv').config({ path: '/root/goldenrabbit/.env' });
 const express = require('express');
 const cron = require('node-cron');
 const axios = require('axios');
