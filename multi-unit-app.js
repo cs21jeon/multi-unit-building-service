@@ -348,53 +348,66 @@ const getLandCharacteristics = async (pnu) => {
   }
 };
 
-// VWorld API를 사용한 대지지분 정보 조회 - 디버깅 강화
+// VWorld API를 사용한 대지지분 정보 조회 - buldSnList API 사용
 const getLandShareInfo = async (pnu, dongNm, hoNm) => {
   try {
     logger.info(`🌍 VWorld 대지지분 정보 조회 시작 - PNU: ${pnu}, 동: ${dongNm}, 호: ${hoNm}`);
     await delay(API_DELAY);
     
-    const response = await axios.get('https://api.vworld.kr/ned/data/ldaregList', {
+    const response = await axios.get('https://api.vworld.kr/ned/data/buldSnList', {
       params: {
         key: VWORLD_APIKEY,
-        domain: 'localhost',
         pnu: pnu,
-        buldDongNm: dongNm || '',
-        buldHoNm: hoNm || '',
-        format: 'xml',
-        numOfRows: 10,
+        format: 'json', // JSON 형식으로 변경
+        numOfRows: 50,
         pageNo: 1
       },
       timeout: 30000
     });
 
     logger.debug(`VWorld 대지지분 응답 상태: ${response.status}`);
-    logger.debug(`VWorld 대지지분 응답 크기: ${response.data ? response.data.length : 0} bytes`);
-
-    const jsonData = convert.xml2js(response.data, { compact: true, spaces: 2, textKey: '_text' });
+    logger.debug(`VWorld 대지지분 응답:`, JSON.stringify(response.data, null, 2));
     
-    logger.debug(`VWorld 대지지분 변환된 JSON:`, JSON.stringify(jsonData, null, 2));
-    
-    if (jsonData && jsonData.response && jsonData.response.fields && jsonData.response.fields.field) {
-      let fields = jsonData.response.fields.field;
-      if (!Array.isArray(fields)) fields = [fields];
+    if (response.data && response.data.ldaregVOList && response.data.ldaregVOList.ldaregVOList) {
+      const items = response.data.ldaregVOList.ldaregVOList;
       
-      for (const field of fields) {
-        if (field.ldaQotaRate && field.ldaQotaRate._text) {
-          const quotaRate = field.ldaQotaRate._text;
-          const shareValue = parseFloat(quotaRate.split('/')[0]);
+      logger.info(`VWorld 대지지분 조회 결과: ${items.length}개 발견`);
+      
+      // 동/호수 매칭 로직
+      for (const item of items) {
+        const itemDong = item.buldDongNm;
+        const itemHo = item.buldHoNm;
+        const ldaQotaRate = item.ldaQotaRate;
+        
+        logger.debug(`매칭 확인: API동=${itemDong}, 입력동=${dongNm}, API호=${itemHo}, 입력호=${hoNm}, 지분=${ldaQotaRate}`);
+        
+        // 동 매칭 로직
+        let dongMatch = false;
+        if (!dongNm || dongNm.trim() === '') {
+          // 입력 동이 없고, API 동이 0000이면 단일동으로 매칭
+          dongMatch = (itemDong === '0000');
+        } else {
+          // 동이 있는 경우 정규화해서 매칭
+          dongMatch = isDongMatch(itemDong, dongNm);
+        }
+        
+        // 호수 매칭 로직
+        const hoMatch = isHoMatch(itemHo, hoNm);
+        
+        logger.debug(`매칭 결과: 동매칭=${dongMatch}, 호매칭=${hoMatch}`);
+        
+        if (dongMatch && hoMatch && ldaQotaRate && ldaQotaRate.trim() !== '') {
+          const shareValue = parseFloat(ldaQotaRate.split('/')[0]);
           if (!isNaN(shareValue)) {
-            logger.info(`✅ VWorld 대지지분 성공 - 지분: ${shareValue} (${quotaRate})`);
+            logger.info(`✅ VWorld 대지지분 성공 - 지분: ${shareValue} (${ldaQotaRate})`);
             return shareValue;
           }
         }
       }
-      logger.warn(`⚠️ VWorld 대지지분 - ldaQotaRate를 찾을 수 없음`);
+      
+      logger.warn(`⚠️ VWorld 대지지분 - 해당 동/호수에 대한 매칭 데이터를 찾을 수 없음`);
     } else {
-      logger.warn(`⚠️ VWorld 대지지분 - 응답 구조 이상: response.fields.field가 없음`);
-      if (jsonData && jsonData.response && jsonData.response.header) {
-        logger.warn(`VWorld 응답 헤더:`, JSON.stringify(jsonData.response.header, null, 2));
-      }
+      logger.warn(`⚠️ VWorld 대지지분 - 응답 구조 이상: ldaregVOList가 없음`);
     }
     
     return null;
@@ -897,7 +910,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     service: 'multi-unit-building-service',
     timestamp: new Date().toISOString(),
-    version: '3.5.0',
+    version: '3.6.0',
     viewId: MULTI_UNIT_VIEW
   });
 });
@@ -1013,7 +1026,7 @@ app.get('/', (req, res) => {
   res.send(`
     <html>
     <head>
-        <title>집합건물 서비스 관리 v3.5</title>
+        <title>집합건물 서비스 관리 v3.6</title>
         <style>
             body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
             .button { display: inline-block; padding: 10px 20px; margin: 10px; 
@@ -1026,7 +1039,7 @@ app.get('/', (req, res) => {
         </style>
     </head>
     <body>
-        <h1>🏗️ 집합건물 서비스 관리 v3.5</h1>
+        <h1>🏗️ 집합건물 서비스 관리 v3.6</h1>
         
         <div class="info">
             <h3>📋 현재 설정</h3>
@@ -1036,12 +1049,12 @@ app.get('/', (req, res) => {
         </div>
 
         <div class="fix">
-            <h3>🔧 v3.5 필드 누락 문제 해결</h3>
+            <h3>🔧 v3.6 VWorld 대지지분 API 개선</h3>
             <ul>
-                <li><strong>빌라/다세대 필드 보완:</strong> 누락된 면적/비율 필드 추가</li>
-                <li><strong>총괄 정보 매핑:</strong> 표제부 정보를 총괄 필드에 매핑</li>
-                <li><strong>도로명주소 보완:</strong> 아파트에서도 표제부에서 추가 수집</li>
-                <li><strong>26개 전체 필드:</strong> 모든 필수 필드 완전 커버</li>
+                <li><strong>새로운 API 사용:</strong> ldaregList → buldSnList로 변경</li>
+                <li><strong>JSON 형식 처리:</strong> XML 대신 JSON으로 응답 처리</li>
+                <li><strong>정확한 동/호수 매칭:</strong> 0000동=단일동, 호수 정규화 매칭</li>
+                <li><strong>대지지분 정확도 향상:</strong> ldaQotaRate에서 앞 숫자만 추출</li>
             </ul>
         </div>
 
