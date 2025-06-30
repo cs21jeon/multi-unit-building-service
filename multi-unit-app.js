@@ -378,17 +378,27 @@ const isHoMatch = (apiHo, inputHo) => {
   return false;
 };
 
-// VWorld API를 사용한 대지지분 정보 조회 - buldRlnmList API 사용
+// VWorld API용 동/호수 숫자 추출 함수
+const extractNumbersOnly = (value) => {
+  if (!value || typeof value !== 'string') return '';
+  
+  // 모든 숫자만 추출 (102동 -> 102, 1003호 -> 1003, B102호 -> 102)
+  const numbers = value.replace(/[^0-9]/g, '');
+  return numbers || '';
+};
+
+// VWorld API를 사용한 대지지분 정보 조회 - buldRlnmList API 사용 (수정)
 const getLandShareInfo = async (pnu, dongNm, hoNm) => {
   try {
     logger.info(`🌍 VWorld 대지지분 정보 조회 시작 - PNU: ${pnu}, 동: ${dongNm}, 호: ${hoNm}`);
     
-    // 동이름 처리: 공란이면 빈 문자열로 설정 (API 파라미터에서 제외)
-    const processedDongNm = (!dongNm || dongNm.trim() === '') ? '' : dongNm.trim();
+    // VWorld API용 동/호수 숫자만 추출
+    const vworldDongNm = extractNumbersOnly(dongNm);
+    const vworldHoNm = extractNumbersOnly(hoNm);
+    
+    logger.debug(`VWorld API 변환: 원본동='${dongNm}' -> VWorld동='${vworldDongNm}', 원본호='${hoNm}' -> VWorld호='${vworldHoNm}'`);
     
     await delay(API_DELAY);
-    
-    logger.debug(`VWorld 대지지분 API 호출 - buldDongNm: '${processedDongNm}', buldHoNm: '${hoNm}'`);
     
     // API 파라미터 구성
     const params = {
@@ -399,14 +409,14 @@ const getLandShareInfo = async (pnu, dongNm, hoNm) => {
       pageNo: 1
     };
     
-    // 동이름이 있을 때만 파라미터에 추가
-    if (processedDongNm) {
-      params.buldDongNm = processedDongNm;
+    // 동이름이 있을 때만 파라미터에 추가 (숫자만)
+    if (vworldDongNm) {
+      params.buldDongNm = vworldDongNm;
     }
     
-    // 호수가 있을 때만 파라미터에 추가
-    if (hoNm && hoNm.trim()) {
-      params.buldHoNm = hoNm.trim();
+    // 호수가 있을 때만 파라미터에 추가 (숫자만)
+    if (vworldHoNm) {
+      params.buldHoNm = vworldHoNm;
     }
     
     const response = await axios.get('https://api.vworld.kr/ned/data/buldRlnmList', {
@@ -491,34 +501,38 @@ const getLandShareInfo = async (pnu, dongNm, hoNm) => {
         
         logger.debug(`항목 확인: API동='${itemDong}', API호='${itemHo}', 지분='${ldaQotaRate}'`);
         
-        // 동 매칭 로직
+        // VWorld API 응답도 숫자로만 비교 (동일한 형태로 매칭)
+        const apiDongNumbers = extractNumbersOnly(String(itemDong));
+        const apiHoNumbers = extractNumbersOnly(String(itemHo));
+        
+        // 동 매칭 로직 (숫자 기반)
         let dongMatch = false;
-        if (!processedDongNm) {
-          // 입력 동이 공란인 경우: API 동이 비어있거나 '0000'이면 매칭
-          dongMatch = (!itemDong || itemDong.trim() === '' || itemDong === '0000');
+        if (!vworldDongNm) {
+          // 입력 동이 공란인 경우: API 동이 비어있거나 '0' 계열이면 매칭
+          dongMatch = (!apiDongNumbers || apiDongNumbers === '' || apiDongNumbers === '0' || apiDongNumbers === '0000');
         } else {
-          // 입력 동이 있는 경우: 기존 동 매칭 로직 사용
-          dongMatch = isDongMatch(itemDong, processedDongNm);
+          // 입력 동이 있는 경우: 숫자가 일치하면 매칭
+          dongMatch = (apiDongNumbers === vworldDongNm);
         }
         
-        // 호수 매칭 로직
-        const hoMatch = isHoMatch(itemHo, hoNm);
+        // 호수 매칭 로직 (숫자 기반)
+        const hoMatch = (apiHoNumbers === vworldHoNm);
         
-        logger.debug(`매칭 결과: 동매칭=${dongMatch}, 호매칭=${hoMatch}`);
+        logger.debug(`매칭 결과: 동매칭=${dongMatch} (API:${apiDongNumbers} vs 입력:${vworldDongNm}), 호매칭=${hoMatch} (API:${apiHoNumbers} vs 입력:${vworldHoNm})`);
         
         if (dongMatch && hoMatch && ldaQotaRate && ldaQotaRate.trim() !== '') {
           // 지분 값 파싱 (예: "123.45/1000000" -> 123.45)
           const shareValue = parseFloat(ldaQotaRate.split('/')[0]);
           if (!isNaN(shareValue)) {
             logger.info(`✅ VWorld 대지지분 성공 - 지분: ${shareValue} (${ldaQotaRate})`);
-            logger.info(`매칭된 항목: API동='${itemDong}', API호='${itemHo}', 입력동='${processedDongNm}', 입력호='${hoNm}'`);
+            logger.info(`매칭된 항목: API동='${itemDong}' (숫자:${apiDongNumbers}), API호='${itemHo}' (숫자:${apiHoNumbers}), 입력동='${dongNm}' (숫자:${vworldDongNm}), 입력호='${hoNm}' (숫자:${vworldHoNm})`);
             return shareValue;
           }
         }
       }
       
       logger.warn(`⚠️ VWorld 대지지분 - ${items.length}개 항목 중 해당 동/호수에 대한 매칭 데이터를 찾을 수 없음`);
-      logger.debug(`매칭 시도한 조건: 동='${processedDongNm}', 호='${hoNm}'`);
+      logger.debug(`매칭 시도한 조건: 동='${dongNm}' (숫자:${vworldDongNm}), 호='${hoNm}' (숫자:${vworldHoNm})`);
       
       // 디버깅을 위해 모든 항목 출력 (최대 10개)
       logger.debug(`수신된 모든 항목의 동/호 정보:`);
@@ -526,7 +540,9 @@ const getLandShareInfo = async (pnu, dongNm, hoNm) => {
         const itemDong = item.buldDongNm || item.dongNm || '';
         const itemHo = item.buldHoNm || item.hoNm || '';
         const ldaQotaRate = item.ldaQotaRate || item.landShareRate || '';
-        logger.debug(`  ${i+1}. 동='${itemDong}', 호='${itemHo}', 지분='${ldaQotaRate}'`);
+        const apiDongNumbers = extractNumbersOnly(String(itemDong));
+        const apiHoNumbers = extractNumbersOnly(String(itemHo));
+        logger.debug(`  ${i+1}. 동='${itemDong}' (숫자:${apiDongNumbers}), 호='${itemHo}' (숫자:${apiHoNumbers}), 지분='${ldaQotaRate}'`);
       });
     } else {
       logger.warn(`⚠️ VWorld 대지지분 - 데이터 없음`);
@@ -556,9 +572,9 @@ const getLandShareInfo = async (pnu, dongNm, hoNm) => {
           // 재시도 결과 처리
           let retryItems = [];
           if (retryResponse.data) {
-            // 재시도에서는 ldaregVOList 구조를 사용
-            if (retryResponse.data.ldaregVOList && retryResponse.data.ldaregVOList.ldaregVOList) {
-              const rawItems = retryResponse.data.ldaregVOList.ldaregVOList;
+            // 재시도에서는 같은 구조 사용
+            if (retryResponse.data.buldRlnmVOList && retryResponse.data.buldRlnmVOList.buldRlnmVOList) {
+              const rawItems = retryResponse.data.buldRlnmVOList.buldRlnmVOList;
               retryItems = Array.isArray(rawItems) ? rawItems : [rawItems];
               logger.info(`재시도에서 ${retryItems.length}개 항목 발견`);
               
@@ -570,27 +586,31 @@ const getLandShareInfo = async (pnu, dongNm, hoNm) => {
                 
                 logger.debug(`재시도 항목 확인: API동='${itemDong}', API호='${itemHo}', 지분='${ldaQotaRate}'`);
                 
-                // 동 매칭 로직
+                // VWorld API 응답도 숫자로만 비교
+                const apiDongNumbers = extractNumbersOnly(String(itemDong));
+                const apiHoNumbers = extractNumbersOnly(String(itemHo));
+                
+                // 동 매칭 로직 (숫자 기반)
                 let dongMatch = false;
-                if (!processedDongNm) {
-                  // 입력 동이 공란인 경우: API 동이 비어있거나 '0000'이면 매칭
-                  dongMatch = (!itemDong || itemDong.trim() === '' || itemDong === '0000');
+                if (!vworldDongNm) {
+                  // 입력 동이 공란인 경우: API 동이 비어있거나 '0' 계열이면 매칭
+                  dongMatch = (!apiDongNumbers || apiDongNumbers === '' || apiDongNumbers === '0' || apiDongNumbers === '0000');
                 } else {
-                  // 입력 동이 있는 경우: 기존 동 매칭 로직 사용
-                  dongMatch = isDongMatch(itemDong, processedDongNm);
+                  // 입력 동이 있는 경우: 숫자가 일치하면 매칭
+                  dongMatch = (apiDongNumbers === vworldDongNm);
                 }
                 
-                // 호수 매칭 로직
-                const hoMatch = isHoMatch(itemHo, hoNm);
+                // 호수 매칭 로직 (숫자 기반)
+                const hoMatch = (apiHoNumbers === vworldHoNm);
                 
-                logger.debug(`재시도 매칭 결과: 동매칭=${dongMatch}, 호매칭=${hoMatch}`);
+                logger.debug(`재시도 매칭 결과: 동매칭=${dongMatch} (API:${apiDongNumbers} vs 입력:${vworldDongNm}), 호매칭=${hoMatch} (API:${apiHoNumbers} vs 입력:${vworldHoNm})`);
                 
                 if (dongMatch && hoMatch && ldaQotaRate && ldaQotaRate.trim() !== '') {
                   // 지분 값 파싱 (예: "40.5/243" -> 40.5)
                   const shareValue = parseFloat(ldaQotaRate.split('/')[0]);
                   if (!isNaN(shareValue)) {
                     logger.info(`✅ VWorld 대지지분 성공 (재시도) - 지분: ${shareValue} (${ldaQotaRate})`);
-                    logger.info(`재시도 매칭된 항목: API동='${itemDong}', API호='${itemHo}', 입력동='${processedDongNm}', 입력호='${hoNm}'`);
+                    logger.info(`재시도 매칭된 항목: API동='${itemDong}' (숫자:${apiDongNumbers}), API호='${itemHo}' (숫자:${apiHoNumbers}), 입력동='${dongNm}' (숫자:${vworldDongNm}), 입력호='${hoNm}' (숫자:${vworldHoNm})`);
                     return shareValue;
                   }
                 }
@@ -602,7 +622,11 @@ const getLandShareInfo = async (pnu, dongNm, hoNm) => {
               logger.debug(`재시도 데이터 처음 3개 항목:`);
               for (let i = 0; i < Math.min(3, retryItems.length); i++) {
                 const item = retryItems[i];
-                logger.debug(`  ${i+1}. 동='${item.buldDongNm}', 호='${item.buldHoNm}', 지분='${item.ldaQotaRate}'`);
+                const itemDong = item.buldDongNm || '';
+                const itemHo = item.buldHoNm || '';
+                const apiDongNumbers = extractNumbersOnly(String(itemDong));
+                const apiHoNumbers = extractNumbersOnly(String(itemHo));
+                logger.debug(`  ${i+1}. 동='${itemDong}' (숫자:${apiDongNumbers}), 호='${itemHo}' (숫자:${apiHoNumbers}), 지분='${item.ldaQotaRate}'`);
               }
             }
           }
