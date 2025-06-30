@@ -322,6 +322,13 @@ const getLandCharacteristics = async (pnu) => {
   }
 };
 
+
+// 문자열에서 숫자만 추출하는 유틸리티 함수 추가 (parseAddress 함수 위에 추가)
+const extractNumbersOnly = (str) => {
+  if (!str || typeof str !== 'string') return '';
+  return str.replace(/[^0-9]/g, '');
+};
+
 // 호수 매칭 함수 개선 (유연한 매칭)
 const isHoMatch = (apiHo, inputHo) => {
   if (!inputHo || !apiHo) return false;
@@ -1088,7 +1095,7 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharac
   return result;
 };
 
-// 메인 처리 함수 수정 - 병렬 처리 부분
+// processMultiUnitBuildingRecord 함수 수정 - housingPrice 변수 사용 추가 
 const processMultiUnitBuildingRecord = async (record) => {
   try {
     const 지번주소 = record['지번 주소'];
@@ -1111,12 +1118,12 @@ const processMultiUnitBuildingRecord = async (record) => {
     const pnu = generatePNU(buildingCodes);
     logger.info(`📍 생성된 PNU: ${pnu}`);
 
-    // 4. API 데이터 수집 - 병렬 처리 (주택가격도 VWorld로 변경)
+    // 4. API 데이터 수집 - 병렬 처리
     logger.info(`📡 API 데이터 수집 시작 (병렬 처리)...`);
     
     const startTime = Date.now();
     
-    // 모든 API를 병렬로 동시 호출 (주택가격도 VWorld API 사용)
+    // 모든 API를 병렬로 동시 호출
     const [recapData, titleData, areaData, exposData, landCharacteristics, landShare, housingPrice] = await Promise.all([
       getBuildingRecapInfo(buildingCodes),
       getBuildingTitleInfo(buildingCodes),
@@ -1126,7 +1133,11 @@ const processMultiUnitBuildingRecord = async (record) => {
       pnu ? getLandShareInfo(pnu, 동, 호수) : Promise.resolve(null),
       pnu ? getHousingPriceInfo(pnu, 동, 호수) : Promise.resolve({ 주택가격만원: 0, 주택가격기준일: null })
     ]);
-    // 6. 데이터 가공 (주택가격 정보를 VWorld에서 가져온 것으로 사용)
+    
+    const apiTime = Date.now() - startTime;
+    logger.info(`⚡ API 데이터 수집 완료 (${apiTime}ms)`);
+
+    // 5. 데이터 가공
     const processedData = processMultiUnitBuildingData(
       recapData, titleData, areaData, landCharacteristics, housingPrice, landShare, 동, 호수
     );
@@ -1136,7 +1147,7 @@ const processMultiUnitBuildingRecord = async (record) => {
       return false;
     }
 
-    // 7. 에어테이블 업데이트
+    // 6. 에어테이블 업데이트
     const updateData = {};
     Object.keys(processedData).forEach(key => {
       const value = processedData[key];
@@ -1153,7 +1164,7 @@ const processMultiUnitBuildingRecord = async (record) => {
     logger.info(`📝 업데이트 예정 필드: ${Object.keys(updateData).join(', ')}`);
     await airtableBase(MULTI_UNIT_TABLE).update(record.id, updateData);
     
-    const totalTime = Date.now() - startTime + apiTime;
+    const totalTime = Date.now() - startTime;
     logger.info(`✅ 에어테이블 업데이트 성공: ${record.id} (총 ${totalTime}ms)`);
     
     return true;
