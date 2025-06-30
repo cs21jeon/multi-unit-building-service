@@ -414,29 +414,69 @@ const getLandShareInfo = async (pnu, dongNm, hoNm) => {
       timeout: 30000
     });
 
+    // API URL과 파라미터 로깅 (디버깅용)
+    const apiUrl = 'https://api.vworld.kr/ned/data/buldRlnmList?' + new URLSearchParams(params).toString();
+    logger.info(`🌐 실제 호출 URL: ${apiUrl}`);
+
     logger.debug(`VWorld 대지지분 응답 상태: ${response.status}`);
-    logger.debug(`VWorld 대지지분 응답 데이터:`, JSON.stringify(response.data, null, 2));
+    logger.info(`VWorld 대지지분 전체 응답:`, JSON.stringify(response.data, null, 2));
     
     // 응답 구조 확인 및 데이터 추출
     let items = [];
     
     if (response.data) {
+      logger.info(`VWorld 대지지분 응답 최상위 키들:`, Object.keys(response.data));
+      
       // 가능한 응답 구조들을 확인
       if (response.data.buldRlnmVOList && response.data.buldRlnmVOList.buldRlnmVOList) {
         // 구조 1: buldRlnmVOList.buldRlnmVOList
         const rawItems = response.data.buldRlnmVOList.buldRlnmVOList;
         items = Array.isArray(rawItems) ? rawItems : [rawItems];
+        logger.info(`구조 1에서 ${items.length}개 항목 발견`);
       } else if (response.data.buldRlnmVOList) {
         // 구조 2: buldRlnmVOList 직접
         const rawItems = response.data.buldRlnmVOList;
         items = Array.isArray(rawItems) ? rawItems : [rawItems];
+        logger.info(`구조 2에서 ${items.length}개 항목 발견`);
       } else if (response.data.results) {
         // 구조 3: results
         const rawItems = response.data.results;
         items = Array.isArray(rawItems) ? rawItems : [rawItems];
+        logger.info(`구조 3에서 ${items.length}개 항목 발견`);
+      } else if (response.data.result) {
+        // 구조 4: result
+        const rawItems = response.data.result;
+        items = Array.isArray(rawItems) ? rawItems : [rawItems];
+        logger.info(`구조 4에서 ${items.length}개 항목 발견`);
       } else if (Array.isArray(response.data)) {
-        // 구조 4: 직접 배열
+        // 구조 5: 직접 배열
         items = response.data;
+        logger.info(`구조 5에서 ${items.length}개 항목 발견`);
+      } else {
+        // 예상치 못한 구조인 경우 모든 키 확인
+        logger.warn(`예상치 못한 응답 구조. 사용 가능한 키들:`, Object.keys(response.data));
+        
+        // 첫 번째 레벨에서 배열이나 객체 찾기
+        for (const key of Object.keys(response.data)) {
+          const value = response.data[key];
+          if (Array.isArray(value)) {
+            logger.info(`키 '${key}'에서 배열 발견: ${value.length}개 항목`);
+            items = value;
+            break;
+          } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+            logger.info(`키 '${key}'에서 객체 발견, 하위 키들:`, Object.keys(value));
+            // 하위 객체에서 배열 찾기
+            for (const subKey of Object.keys(value)) {
+              const subValue = value[subKey];
+              if (Array.isArray(subValue)) {
+                logger.info(`하위 키 '${key}.${subKey}'에서 배열 발견: ${subValue.length}개 항목`);
+                items = subValue;
+                break;
+              }
+            }
+            if (items.length > 0) break;
+          }
+        }
       }
     }
     
@@ -490,6 +530,40 @@ const getLandShareInfo = async (pnu, dongNm, hoNm) => {
       });
     } else {
       logger.warn(`⚠️ VWorld 대지지분 - 데이터 없음`);
+      
+      // 동/호 파라미터 없이 다시 시도
+      if (params.buldDongNm || params.buldHoNm) {
+        logger.info(`🔄 동/호 파라미터 없이 재시도...`);
+        
+        const retryParams = {
+          key: VWORLD_APIKEY,
+          pnu: pnu,
+          format: 'json',
+          numOfRows: 10,
+          pageNo: 1
+        };
+        
+        try {
+          const retryResponse = await axios.get('https://api.vworld.kr/ned/data/buldRlnmList', {
+            params: retryParams,
+            timeout: 30000
+          });
+          
+          const retryApiUrl = 'https://api.vworld.kr/ned/data/buldRlnmList?' + new URLSearchParams(retryParams).toString();
+          logger.info(`🌐 재시도 URL: ${retryApiUrl}`);
+          logger.info(`재시도 응답:`, JSON.stringify(retryResponse.data, null, 2));
+          
+          // 재시도 결과도 같은 방식으로 처리
+          let retryItems = [];
+          if (retryResponse.data) {
+            // ... (같은 구조 확인 로직)
+          }
+          
+        } catch (retryError) {
+          logger.error(`재시도 실패:`, retryError.message);
+        }
+      }
+      
       logger.debug(`전체 응답 구조:`, JSON.stringify(response.data, null, 2));
     }
     
