@@ -72,6 +72,12 @@ const RETRY_DELAY = 3000;
 // 유틸리티 함수들
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// 문자열에서 숫자만 추출하는 유틸리티 함수 추가 (
+const extractNumbersOnly = (str) => {
+  if (!str || typeof str !== 'string') return '';
+  return str.replace(/[^0-9]/g, '');
+};
+
 const parseAddress = (address) => {
   if (!address || typeof address !== "string" || address.trim() === "") {
     return { error: "주소 없음", 원본주소: address || "입력값 없음" };
@@ -320,13 +326,6 @@ const getLandCharacteristics = async (pnu) => {
     }
     return { 용도지역: null, 토지면적: null };
   }
-};
-
-
-// 문자열에서 숫자만 추출하는 유틸리티 함수 추가 (parseAddress 함수 위에 추가)
-const extractNumbersOnly = (str) => {
-  if (!str || typeof str !== 'string') return '';
-  return str.replace(/[^0-9]/g, '');
 };
 
 // 호수 매칭 함수 개선 (유연한 매칭)
@@ -1124,7 +1123,7 @@ const processMultiUnitBuildingRecord = async (record) => {
     const startTime = Date.now();
     
     // 모든 API를 병렬로 동시 호출
-    const [recapData, titleData, areaData, exposData, landCharacteristics, landShare, housingPrice] = await Promise.all([
+    const [recapData, titleData, areaData, exposData, landCharacteristics, landShare, housingPriceData] = await Promise.all([
       getBuildingRecapInfo(buildingCodes),
       getBuildingTitleInfo(buildingCodes),
       getBuildingAreaInfo(buildingCodes, 동, 호수),
@@ -1139,7 +1138,7 @@ const processMultiUnitBuildingRecord = async (record) => {
 
     // 5. 데이터 가공
     const processedData = processMultiUnitBuildingData(
-      recapData, titleData, areaData, landCharacteristics, housingPrice, landShare, 동, 호수
+      recapData, titleData, areaData, landCharacteristics, housingPriceData, landShare, 동, 호수
     );
 
     if (Object.keys(processedData).length === 0) {
