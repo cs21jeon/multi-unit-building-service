@@ -348,105 +348,90 @@ const getLandCharacteristics = async (pnu) => {
   }
 };
 
-// VWorld API를 사용한 대지지분 정보 조회 - 대형 아파트 지원 (최대 5000호실)
+// VWorld API를 사용한 대지지분 정보 조회 - buldRlnmList API 사용
 const getLandShareInfo = async (pnu, dongNm, hoNm) => {
   try {
     logger.info(`🌍 VWorld 대지지분 정보 조회 시작 - PNU: ${pnu}, 동: ${dongNm}, 호: ${hoNm}`);
     
-    let allItems = [];
-    let pageNo = 1;
-    const numOfRows = 100; // 한 번에 100개씩 (안전한 크기)
-    let totalProcessed = 0;
-    const maxPages = 50; // 최대 50페이지 (5000개 호실 지원)
+    // 동이름 처리: 공란이면 '0000'으로 설정
+    const processedDongNm = (!dongNm || dongNm.trim() === '') ? '0000' : dongNm.trim();
     
-    while (true) {
-      await delay(API_DELAY);
-      
-      logger.debug(`VWorld 대지지분 페이지 ${pageNo} 조회 중...`);
-      
-      const response = await axios.get('https://api.vworld.kr/ned/data/buldSnList', {
-        params: {
-          key: VWORLD_APIKEY,
-          pnu: pnu,
-          format: 'json',
-          numOfRows: numOfRows,
-          pageNo: pageNo
-        },
-        timeout: 30000
-      });
+    await delay(API_DELAY);
+    
+    logger.debug(`VWorld 대지지분 API 호출 - buldDongNm: ${processedDongNm}, buldHoNm: ${hoNm}`);
+    
+    const response = await axios.get('https://api.vworld.kr/ned/data/buldRlnmList', {
+      params: {
+        key: VWORLD_APIKEY,
+        pnu: pnu,
+        buldDongNm: processedDongNm,
+        buldHoNm: hoNm || '',
+        format: 'json',
+        numOfRows: 10,
+        pageNo: 1
+      },
+      timeout: 30000
+    });
 
-      logger.debug(`VWorld 대지지분 페이지 ${pageNo} 응답 상태: ${response.status}`);
+    logger.debug(`VWorld 대지지분 응답 상태: ${response.status}`);
+    
+    if (response.data && response.data.buldRlnmVOList && response.data.buldRlnmVOList.buldRlnmVOList) {
+      const items = Array.isArray(response.data.buldRlnmVOList.buldRlnmVOList) 
+        ? response.data.buldRlnmVOList.buldRlnmVOList 
+        : [response.data.buldRlnmVOList.buldRlnmVOList];
       
-      if (response.data && response.data.ldaregVOList && response.data.ldaregVOList.ldaregVOList) {
-        const items = Array.isArray(response.data.ldaregVOList.ldaregVOList) 
-          ? response.data.ldaregVOList.ldaregVOList 
-          : [response.data.ldaregVOList.ldaregVOList];
+      logger.debug(`VWorld 대지지분 - ${items.length}개 항목 수신`);
+      
+      // 매칭되는 항목 찾기
+      for (const item of items) {
+        const itemDong = item.buldDongNm;
+        const itemHo = item.buldHoNm;
+        const ldaQotaRate = item.ldaQotaRate;
         
-        allItems.push(...items);
-        totalProcessed += items.length;
+        logger.debug(`항목 확인: API동='${itemDong}', API호='${itemHo}', 지분='${ldaQotaRate}'`);
         
-        logger.debug(`페이지 ${pageNo}: ${items.length}개 수집, 총 ${totalProcessed}개`);
+        // 동 매칭 로직
+        let dongMatch = false;
+        if (processedDongNm === '0000') {
+          // 입력 동이 공란(0000)인 경우: API 동이 '0000' 또는 빈 값이면 매칭
+          dongMatch = (itemDong === '0000' || !itemDong || itemDong.trim() === '');
+        } else {
+          // 입력 동이 있는 경우: 기존 동 매칭 로직 사용
+          dongMatch = isDongMatch(itemDong, processedDongNm);
+        }
         
-        // 매칭되는 항목을 찾으면 즉시 반환 (성능 최적화)
-        for (const item of items) {
-          const itemDong = item.buldDongNm;
-          const itemHo = item.buldHoNm;
-          const ldaQotaRate = item.ldaQotaRate;
-          
-          // 동 매칭 로직
-          let dongMatch = false;
-          if (!dongNm || dongNm.trim() === '') {
-            dongMatch = (itemDong === '0000');
-          } else {
-            dongMatch = isDongMatch(itemDong, dongNm);
-          }
-          
-          // 호수 매칭 로직
-          const hoMatch = isHoMatch(itemHo, hoNm);
-          
-          if (dongMatch && hoMatch && ldaQotaRate && ldaQotaRate.trim() !== '') {
-            const shareValue = parseFloat(ldaQotaRate.split('/')[0]);
-            if (!isNaN(shareValue)) {
-              logger.info(`✅ VWorld 대지지분 성공 (페이지 ${pageNo}에서 발견) - 지분: ${shareValue} (${ldaQotaRate})`);
-              logger.info(`매칭된 항목: API동='${itemDong}', API호='${itemHo}', 입력동='${dongNm}', 입력호='${hoNm}'`);
-              return shareValue;
-            }
+        // 호수 매칭 로직
+        const hoMatch = isHoMatch(itemHo, hoNm);
+        
+        logger.debug(`매칭 결과: 동매칭=${dongMatch}, 호매칭=${hoMatch}`);
+        
+        if (dongMatch && hoMatch && ldaQotaRate && ldaQotaRate.trim() !== '') {
+          // 지분 값 파싱 (예: "123.45/1000000" -> 123.45)
+          const shareValue = parseFloat(ldaQotaRate.split('/')[0]);
+          if (!isNaN(shareValue)) {
+            logger.info(`✅ VWorld 대지지분 성공 - 지분: ${shareValue} (${ldaQotaRate})`);
+            logger.info(`매칭된 항목: API동='${itemDong}', API호='${itemHo}', 입력동='${processedDongNm}', 입력호='${hoNm}'`);
+            return shareValue;
           }
         }
-        
-        // 더 이상 데이터가 없거나 현재 페이지가 마지막이면 중단
-        if (items.length < numOfRows) {
-          logger.info(`모든 페이지 수집 완료: 총 ${totalProcessed}개 항목 (${pageNo}페이지)`);
-          break;
-        }
-        
-        // 최대 페이지 제한 (대형 아파트 지원)
-        if (pageNo >= maxPages) {
-          logger.warn(`최대 페이지 제한 도달 (${maxPages}페이지), 수집 중단`);
-          break;
-        }
-        
-        pageNo++;
-      } else {
-        logger.warn(`페이지 ${pageNo}에서 데이터 없음, 수집 중단`);
-        break;
       }
-    }
-    
-    if (allItems.length === 0) {
-      logger.warn(`⚠️ VWorld 대지지분 - 데이터 없음`);
-      return null;
-    }
-    
-    logger.warn(`⚠️ VWorld 대지지분 - 전체 ${totalProcessed}개 항목 중 해당 동/호수에 대한 매칭 데이터를 찾을 수 없음`);
-    logger.debug(`매칭 시도한 조건: 동='${dongNm}', 호='${hoNm}'`);
-    
-    // 디버깅을 위해 처음 몇 개 항목 출력
-    if (allItems.length > 0) {
-      logger.debug(`참고: 첫 3개 항목의 동/호 정보:`);
-      for (let i = 0; i < Math.min(3, allItems.length); i++) {
-        const item = allItems[i];
-        logger.debug(`  ${i+1}. 동='${item.buldDongNm}', 호='${item.buldHoNm}', 지분='${item.ldaQotaRate}'`);
+      
+      if (items.length === 0) {
+        logger.warn(`⚠️ VWorld 대지지분 - 데이터 없음`);
+      } else {
+        logger.warn(`⚠️ VWorld 대지지분 - ${items.length}개 항목 중 해당 동/호수에 대한 매칭 데이터를 찾을 수 없음`);
+        logger.debug(`매칭 시도한 조건: 동='${processedDongNm}', 호='${hoNm}'`);
+        
+        // 디버깅을 위해 모든 항목 출력 (최대 10개)
+        logger.debug(`수신된 모든 항목의 동/호 정보:`);
+        items.forEach((item, i) => {
+          logger.debug(`  ${i+1}. 동='${item.buldDongNm}', 호='${item.buldHoNm}', 지분='${item.ldaQotaRate}'`);
+        });
+      }
+    } else {
+      logger.warn(`⚠️ VWorld 대지지분 - 응답 구조 이상: buldRlnmVOList가 없음`);
+      if (response.data && response.data.response && response.data.response.header) {
+        logger.warn(`VWorld 응답 헤더:`, JSON.stringify(response.data.response.header, null, 2));
       }
     }
     
