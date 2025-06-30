@@ -348,53 +348,114 @@ const getLandCharacteristics = async (pnu) => {
   }
 };
 
+// 호수 매칭 함수 개선 (유연한 매칭)
+const isHoMatch = (apiHo, inputHo) => {
+  if (!inputHo || !apiHo) return false;
+  
+  const apiHoStr = String(apiHo).trim();
+  const inputHoStr = String(inputHo).trim();
+  
+  // 1. 완전 일치 (우선순위 최고)
+  if (apiHoStr === inputHoStr) {
+    return true;
+  }
+  
+  // 2. 호수 부분만 추출해서 비교
+  const getHoNumber = (hoStr) => {
+    // "1층201호" → "201", "201호" → "201", "201" → "201" 
+    const match = hoStr.match(/(\d+)호?$/);
+    return match ? match[1] : hoStr.replace(/[^0-9]/g, '');
+  };
+  
+  const apiNumber = getHoNumber(apiHoStr);
+  const inputNumber = getHoNumber(inputHoStr);
+  
+  // 3. 숫자 부분이 일치하면 매칭 (201호 ↔ 201, 1층201호 ↔ 201)
+  if (apiNumber && inputNumber && apiNumber === inputNumber) {
+    return true;
+  }
+  
+  return false;
+};
+
 // VWorld API를 사용한 대지지분 정보 조회 - buldRlnmList API 사용
 const getLandShareInfo = async (pnu, dongNm, hoNm) => {
   try {
     logger.info(`🌍 VWorld 대지지분 정보 조회 시작 - PNU: ${pnu}, 동: ${dongNm}, 호: ${hoNm}`);
     
-    // 동이름 처리: 공란이면 '0000'으로 설정
-    const processedDongNm = (!dongNm || dongNm.trim() === '') ? '0000' : dongNm.trim();
+    // 동이름 처리: 공란이면 빈 문자열로 설정 (API 파라미터에서 제외)
+    const processedDongNm = (!dongNm || dongNm.trim() === '') ? '' : dongNm.trim();
     
     await delay(API_DELAY);
     
-    logger.debug(`VWorld 대지지분 API 호출 - buldDongNm: ${processedDongNm}, buldHoNm: ${hoNm}`);
+    logger.debug(`VWorld 대지지분 API 호출 - buldDongNm: '${processedDongNm}', buldHoNm: '${hoNm}'`);
+    
+    // API 파라미터 구성
+    const params = {
+      key: VWORLD_APIKEY,
+      pnu: pnu,
+      format: 'json',
+      numOfRows: 10,
+      pageNo: 1
+    };
+    
+    // 동이름이 있을 때만 파라미터에 추가
+    if (processedDongNm) {
+      params.buldDongNm = processedDongNm;
+    }
+    
+    // 호수가 있을 때만 파라미터에 추가
+    if (hoNm && hoNm.trim()) {
+      params.buldHoNm = hoNm.trim();
+    }
     
     const response = await axios.get('https://api.vworld.kr/ned/data/buldRlnmList', {
-      params: {
-        key: VWORLD_APIKEY,
-        pnu: pnu,
-        buldDongNm: processedDongNm,
-        buldHoNm: hoNm || '',
-        format: 'json',
-        numOfRows: 10,
-        pageNo: 1
-      },
+      params: params,
       timeout: 30000
     });
 
     logger.debug(`VWorld 대지지분 응답 상태: ${response.status}`);
+    logger.debug(`VWorld 대지지분 응답 데이터:`, JSON.stringify(response.data, null, 2));
     
-    if (response.data && response.data.buldRlnmVOList && response.data.buldRlnmVOList.buldRlnmVOList) {
-      const items = Array.isArray(response.data.buldRlnmVOList.buldRlnmVOList) 
-        ? response.data.buldRlnmVOList.buldRlnmVOList 
-        : [response.data.buldRlnmVOList.buldRlnmVOList];
-      
-      logger.debug(`VWorld 대지지분 - ${items.length}개 항목 수신`);
-      
+    // 응답 구조 확인 및 데이터 추출
+    let items = [];
+    
+    if (response.data) {
+      // 가능한 응답 구조들을 확인
+      if (response.data.buldRlnmVOList && response.data.buldRlnmVOList.buldRlnmVOList) {
+        // 구조 1: buldRlnmVOList.buldRlnmVOList
+        const rawItems = response.data.buldRlnmVOList.buldRlnmVOList;
+        items = Array.isArray(rawItems) ? rawItems : [rawItems];
+      } else if (response.data.buldRlnmVOList) {
+        // 구조 2: buldRlnmVOList 직접
+        const rawItems = response.data.buldRlnmVOList;
+        items = Array.isArray(rawItems) ? rawItems : [rawItems];
+      } else if (response.data.results) {
+        // 구조 3: results
+        const rawItems = response.data.results;
+        items = Array.isArray(rawItems) ? rawItems : [rawItems];
+      } else if (Array.isArray(response.data)) {
+        // 구조 4: 직접 배열
+        items = response.data;
+      }
+    }
+    
+    logger.debug(`VWorld 대지지분 - ${items.length}개 항목 수신`);
+    
+    if (items.length > 0) {
       // 매칭되는 항목 찾기
       for (const item of items) {
-        const itemDong = item.buldDongNm;
-        const itemHo = item.buldHoNm;
-        const ldaQotaRate = item.ldaQotaRate;
+        const itemDong = item.buldDongNm || item.dongNm || '';
+        const itemHo = item.buldHoNm || item.hoNm || '';
+        const ldaQotaRate = item.ldaQotaRate || item.landShareRate || '';
         
         logger.debug(`항목 확인: API동='${itemDong}', API호='${itemHo}', 지분='${ldaQotaRate}'`);
         
         // 동 매칭 로직
         let dongMatch = false;
-        if (processedDongNm === '0000') {
-          // 입력 동이 공란(0000)인 경우: API 동이 '0000' 또는 빈 값이면 매칭
-          dongMatch = (itemDong === '0000' || !itemDong || itemDong.trim() === '');
+        if (!processedDongNm) {
+          // 입력 동이 공란인 경우: API 동이 비어있거나 '0000'이면 매칭
+          dongMatch = (!itemDong || itemDong.trim() === '' || itemDong === '0000');
         } else {
           // 입력 동이 있는 경우: 기존 동 매칭 로직 사용
           dongMatch = isDongMatch(itemDong, processedDongNm);
@@ -416,23 +477,20 @@ const getLandShareInfo = async (pnu, dongNm, hoNm) => {
         }
       }
       
-      if (items.length === 0) {
-        logger.warn(`⚠️ VWorld 대지지분 - 데이터 없음`);
-      } else {
-        logger.warn(`⚠️ VWorld 대지지분 - ${items.length}개 항목 중 해당 동/호수에 대한 매칭 데이터를 찾을 수 없음`);
-        logger.debug(`매칭 시도한 조건: 동='${processedDongNm}', 호='${hoNm}'`);
-        
-        // 디버깅을 위해 모든 항목 출력 (최대 10개)
-        logger.debug(`수신된 모든 항목의 동/호 정보:`);
-        items.forEach((item, i) => {
-          logger.debug(`  ${i+1}. 동='${item.buldDongNm}', 호='${item.buldHoNm}', 지분='${item.ldaQotaRate}'`);
-        });
-      }
+      logger.warn(`⚠️ VWorld 대지지분 - ${items.length}개 항목 중 해당 동/호수에 대한 매칭 데이터를 찾을 수 없음`);
+      logger.debug(`매칭 시도한 조건: 동='${processedDongNm}', 호='${hoNm}'`);
+      
+      // 디버깅을 위해 모든 항목 출력 (최대 10개)
+      logger.debug(`수신된 모든 항목의 동/호 정보:`);
+      items.forEach((item, i) => {
+        const itemDong = item.buldDongNm || item.dongNm || '';
+        const itemHo = item.buldHoNm || item.hoNm || '';
+        const ldaQotaRate = item.ldaQotaRate || item.landShareRate || '';
+        logger.debug(`  ${i+1}. 동='${itemDong}', 호='${itemHo}', 지분='${ldaQotaRate}'`);
+      });
     } else {
-      logger.warn(`⚠️ VWorld 대지지분 - 응답 구조 이상: buldRlnmVOList가 없음`);
-      if (response.data && response.data.response && response.data.response.header) {
-        logger.warn(`VWorld 응답 헤더:`, JSON.stringify(response.data.response.header, null, 2));
-      }
+      logger.warn(`⚠️ VWorld 대지지분 - 데이터 없음`);
+      logger.debug(`전체 응답 구조:`, JSON.stringify(response.data, null, 2));
     }
     
     return null;
@@ -1079,36 +1137,7 @@ app.get('/', (req, res) => {
             <p><strong>스케줄:</strong> 1분마다 실행</p>
             <p><strong>날짜 정보:</strong> 사용승인일, 주택가격기준일 (ISO 형식으로 변환)</p>
             <p><strong>기타 정보:</strong> 용도지역, 주택가격, 대지지분</p>
-
-// 호수 매칭 함수 개선 (유연한 매칭)
-const isHoMatch = (apiHo, inputHo) => {
-  if (!inputHo || !apiHo) return false;
-  
-  const apiHoStr = String(apiHo).trim();
-  const inputHoStr = String(inputHo).trim();
-  
-  // 1. 완전 일치 (우선순위 최고)
-  if (apiHoStr === inputHoStr) {
-    return true;
-  }
-  
-  // 2. 호수 부분만 추출해서 비교
-  const getHoNumber = (hoStr) => {
-    // "201호" → "201", "201" → "201" 
-    const match = hoStr.match(/(\d+)호?$/);
-    return match ? match[1] : hoStr.replace(/[^0-9]/g, '');
-  };
-  
-  const apiNumber = getHoNumber(apiHoStr);
-  const inputNumber = getHoNumber(inputHoStr);
-  
-  // 3. 숫자 부분이 일치하면 매칭 (201호 ↔ 201)
-  if (apiNumber && inputNumber && apiNumber === inputNumber) {
-    return true;
-  }
-  
-  return false;
-};
+        </div>
 
         <h3>🔧 관리 기능</h3>
         <a href="/health" class="button">상태 확인</a>
@@ -1133,14 +1162,21 @@ const isHoMatch = (apiHo, inputHo) => {
             <p><strong>기타 정보:</strong> 용도지역, 주택가격, 대지지분</p>
             <p><strong>날짜 정보:</strong> 사용승인일, 주택가격기준일 (ISO 형식으로 변환)</p>
         </div>
+        
+        <h3>🆕 v3.8 업데이트</h3>
+        <div class="fix">
+            <p><strong>대지지분 API 변경:</strong> buldRlnmList API 사용</p>
+            <p><strong>호수 매칭 개선:</strong> "1층201호" → "201" 추출 매칭</p>
+            <p><strong>동이름 처리:</strong> 공란일 때 API 파라미터에서 제외</p>
+            <p><strong>응답 구조 유연성:</strong> 다양한 VWorld API 응답 구조 지원</p>
         </div>
     </body>
     </html>
-
   `);
 });
+
 app.listen(PORT, () => {
-  logger.info('🚀 집합건물 서비스 v3.5 시작됨');
+  logger.info('🚀 집합건물 서비스 v3.8 시작됨');
   logger.info(`📡 포트: ${PORT}`);
   logger.info(`🌐 웹 인터페이스: http://localhost:${PORT}`);
   logger.info(`📋 사용 뷰: ${MULTI_UNIT_VIEW}`);
