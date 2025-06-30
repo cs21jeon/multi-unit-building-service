@@ -553,10 +553,58 @@ const getLandShareInfo = async (pnu, dongNm, hoNm) => {
           logger.info(`🌐 재시도 URL: ${retryApiUrl}`);
           logger.info(`재시도 응답:`, JSON.stringify(retryResponse.data, null, 2));
           
-          // 재시도 결과도 같은 방식으로 처리
+          // 재시도 결과 처리
           let retryItems = [];
           if (retryResponse.data) {
-            // ... (같은 구조 확인 로직)
+            // 재시도에서는 ldaregVOList 구조를 사용
+            if (retryResponse.data.ldaregVOList && retryResponse.data.ldaregVOList.ldaregVOList) {
+              const rawItems = retryResponse.data.ldaregVOList.ldaregVOList;
+              retryItems = Array.isArray(rawItems) ? rawItems : [rawItems];
+              logger.info(`재시도에서 ${retryItems.length}개 항목 발견`);
+              
+              // 재시도 데이터에서 매칭 시도
+              for (const item of retryItems) {
+                const itemDong = item.buldDongNm || '';
+                const itemHo = item.buldHoNm || '';
+                const ldaQotaRate = item.ldaQotaRate || '';
+                
+                logger.debug(`재시도 항목 확인: API동='${itemDong}', API호='${itemHo}', 지분='${ldaQotaRate}'`);
+                
+                // 동 매칭 로직
+                let dongMatch = false;
+                if (!processedDongNm) {
+                  // 입력 동이 공란인 경우: API 동이 비어있거나 '0000'이면 매칭
+                  dongMatch = (!itemDong || itemDong.trim() === '' || itemDong === '0000');
+                } else {
+                  // 입력 동이 있는 경우: 기존 동 매칭 로직 사용
+                  dongMatch = isDongMatch(itemDong, processedDongNm);
+                }
+                
+                // 호수 매칭 로직
+                const hoMatch = isHoMatch(itemHo, hoNm);
+                
+                logger.debug(`재시도 매칭 결과: 동매칭=${dongMatch}, 호매칭=${hoMatch}`);
+                
+                if (dongMatch && hoMatch && ldaQotaRate && ldaQotaRate.trim() !== '') {
+                  // 지분 값 파싱 (예: "40.5/243" -> 40.5)
+                  const shareValue = parseFloat(ldaQotaRate.split('/')[0]);
+                  if (!isNaN(shareValue)) {
+                    logger.info(`✅ VWorld 대지지분 성공 (재시도) - 지분: ${shareValue} (${ldaQotaRate})`);
+                    logger.info(`재시도 매칭된 항목: API동='${itemDong}', API호='${itemHo}', 입력동='${processedDongNm}', 입력호='${hoNm}'`);
+                    return shareValue;
+                  }
+                }
+              }
+              
+              logger.warn(`⚠️ 재시도: ${retryItems.length}개 항목 중 매칭 데이터 없음`);
+              
+              // 디버깅을 위해 재시도 데이터의 처음 몇 개 항목 출력
+              logger.debug(`재시도 데이터 처음 3개 항목:`);
+              for (let i = 0; i < Math.min(3, retryItems.length); i++) {
+                const item = retryItems[i];
+                logger.debug(`  ${i+1}. 동='${item.buldDongNm}', 호='${item.buldHoNm}', 지분='${item.ldaQotaRate}'`);
+              }
+            }
           }
           
         } catch (retryError) {
