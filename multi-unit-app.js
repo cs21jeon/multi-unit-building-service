@@ -348,66 +348,106 @@ const getLandCharacteristics = async (pnu) => {
   }
 };
 
-// VWorld API를 사용한 대지지분 정보 조회 - buldSnList API 사용
+// VWorld API를 사용한 대지지분 정보 조회 - 대형 아파트 지원 (최대 5000호실)
 const getLandShareInfo = async (pnu, dongNm, hoNm) => {
   try {
     logger.info(`🌍 VWorld 대지지분 정보 조회 시작 - PNU: ${pnu}, 동: ${dongNm}, 호: ${hoNm}`);
-    await delay(API_DELAY);
     
-    const response = await axios.get('https://api.vworld.kr/ned/data/buldSnList', {
-      params: {
-        key: VWORLD_APIKEY,
-        pnu: pnu,
-        format: 'json', // JSON 형식으로 변경
-        numOfRows: 50,
-        pageNo: 1
-      },
-      timeout: 30000
-    });
+    let allItems = [];
+    let pageNo = 1;
+    const numOfRows = 100; // 한 번에 100개씩 (안전한 크기)
+    let totalProcessed = 0;
+    const maxPages = 50; // 최대 50페이지 (5000개 호실 지원)
+    
+    while (true) {
+      await delay(API_DELAY);
+      
+      logger.debug(`VWorld 대지지분 페이지 ${pageNo} 조회 중...`);
+      
+      const response = await axios.get('https://api.vworld.kr/ned/data/buldSnList', {
+        params: {
+          key: VWORLD_APIKEY,
+          pnu: pnu,
+          format: 'json',
+          numOfRows: numOfRows,
+          pageNo: pageNo
+        },
+        timeout: 30000
+      });
 
-    logger.debug(`VWorld 대지지분 응답 상태: ${response.status}`);
-    logger.debug(`VWorld 대지지분 응답:`, JSON.stringify(response.data, null, 2));
-    
-    if (response.data && response.data.ldaregVOList && response.data.ldaregVOList.ldaregVOList) {
-      const items = response.data.ldaregVOList.ldaregVOList;
+      logger.debug(`VWorld 대지지분 페이지 ${pageNo} 응답 상태: ${response.status}`);
       
-      logger.info(`VWorld 대지지분 조회 결과: ${items.length}개 발견`);
-      
-      // 동/호수 매칭 로직
-      for (const item of items) {
-        const itemDong = item.buldDongNm;
-        const itemHo = item.buldHoNm;
-        const ldaQotaRate = item.ldaQotaRate;
+      if (response.data && response.data.ldaregVOList && response.data.ldaregVOList.ldaregVOList) {
+        const items = Array.isArray(response.data.ldaregVOList.ldaregVOList) 
+          ? response.data.ldaregVOList.ldaregVOList 
+          : [response.data.ldaregVOList.ldaregVOList];
         
-        logger.debug(`매칭 확인: API동=${itemDong}, 입력동=${dongNm}, API호=${itemHo}, 입력호=${hoNm}, 지분=${ldaQotaRate}`);
+        allItems.push(...items);
+        totalProcessed += items.length;
         
-        // 동 매칭 로직
-        let dongMatch = false;
-        if (!dongNm || dongNm.trim() === '') {
-          // 입력 동이 없고, API 동이 0000이면 단일동으로 매칭
-          dongMatch = (itemDong === '0000');
-        } else {
-          // 동이 있는 경우 정규화해서 매칭
-          dongMatch = isDongMatch(itemDong, dongNm);
-        }
+        logger.debug(`페이지 ${pageNo}: ${items.length}개 수집, 총 ${totalProcessed}개`);
         
-        // 호수 매칭 로직
-        const hoMatch = isHoMatch(itemHo, hoNm);
-        
-        logger.debug(`매칭 결과: 동매칭=${dongMatch}, 호매칭=${hoMatch}`);
-        
-        if (dongMatch && hoMatch && ldaQotaRate && ldaQotaRate.trim() !== '') {
-          const shareValue = parseFloat(ldaQotaRate.split('/')[0]);
-          if (!isNaN(shareValue)) {
-            logger.info(`✅ VWorld 대지지분 성공 - 지분: ${shareValue} (${ldaQotaRate})`);
-            return shareValue;
+        // 매칭되는 항목을 찾으면 즉시 반환 (성능 최적화)
+        for (const item of items) {
+          const itemDong = item.buldDongNm;
+          const itemHo = item.buldHoNm;
+          const ldaQotaRate = item.ldaQotaRate;
+          
+          // 동 매칭 로직
+          let dongMatch = false;
+          if (!dongNm || dongNm.trim() === '') {
+            dongMatch = (itemDong === '0000');
+          } else {
+            dongMatch = isDongMatch(itemDong, dongNm);
+          }
+          
+          // 호수 매칭 로직
+          const hoMatch = isHoMatch(itemHo, hoNm);
+          
+          if (dongMatch && hoMatch && ldaQotaRate && ldaQotaRate.trim() !== '') {
+            const shareValue = parseFloat(ldaQotaRate.split('/')[0]);
+            if (!isNaN(shareValue)) {
+              logger.info(`✅ VWorld 대지지분 성공 (페이지 ${pageNo}에서 발견) - 지분: ${shareValue} (${ldaQotaRate})`);
+              logger.info(`매칭된 항목: API동='${itemDong}', API호='${itemHo}', 입력동='${dongNm}', 입력호='${hoNm}'`);
+              return shareValue;
+            }
           }
         }
+        
+        // 더 이상 데이터가 없거나 현재 페이지가 마지막이면 중단
+        if (items.length < numOfRows) {
+          logger.info(`모든 페이지 수집 완료: 총 ${totalProcessed}개 항목 (${pageNo}페이지)`);
+          break;
+        }
+        
+        // 최대 페이지 제한 (대형 아파트 지원)
+        if (pageNo >= maxPages) {
+          logger.warn(`최대 페이지 제한 도달 (${maxPages}페이지), 수집 중단`);
+          break;
+        }
+        
+        pageNo++;
+      } else {
+        logger.warn(`페이지 ${pageNo}에서 데이터 없음, 수집 중단`);
+        break;
       }
-      
-      logger.warn(`⚠️ VWorld 대지지분 - 해당 동/호수에 대한 매칭 데이터를 찾을 수 없음`);
-    } else {
-      logger.warn(`⚠️ VWorld 대지지분 - 응답 구조 이상: ldaregVOList가 없음`);
+    }
+    
+    if (allItems.length === 0) {
+      logger.warn(`⚠️ VWorld 대지지분 - 데이터 없음`);
+      return null;
+    }
+    
+    logger.warn(`⚠️ VWorld 대지지분 - 전체 ${totalProcessed}개 항목 중 해당 동/호수에 대한 매칭 데이터를 찾을 수 없음`);
+    logger.debug(`매칭 시도한 조건: 동='${dongNm}', 호='${hoNm}'`);
+    
+    // 디버깅을 위해 처음 몇 개 항목 출력
+    if (allItems.length > 0) {
+      logger.debug(`참고: 첫 3개 항목의 동/호 정보:`);
+      for (let i = 0; i < Math.min(3, allItems.length); i++) {
+        const item = allItems[i];
+        logger.debug(`  ${i+1}. 동='${item.buldDongNm}', 호='${item.buldHoNm}', 지분='${item.ldaQotaRate}'`);
+      }
     }
     
     return null;
@@ -451,13 +491,19 @@ const isDongMatch = (apiDong, inputDong) => {
   return normalizedInput === normalizedApi;
 };
 
-const isHoMatch = (apiHo, inputHo) => {
-  if (!inputHo) return false;
+// 호수 정규화 함수 개선 (층 정보 제거)
+const normalizeHosu = (value) => {
+  if (!value || typeof value !== 'string') return '';
   
-  const normalizedInput = normalizeDongHo(inputHo);
-  const normalizedApi = normalizeDongHo(apiHo || '');
+  // "1층201호", "지하1층B102호" 등에서 호수만 추출
+  const hoMatch = value.match(/(\d+)호$/);
+  if (hoMatch) {
+    return hoMatch[1]; // 마지막 숫자호수만 반환 (201호 → 201)
+  }
   
-  return normalizedInput === normalizedApi;
+  // "B102", "1001" 등 기존 로직
+  const numbers = value.replace(/[^0-9]/g, '');
+  return numbers;
 };
 
 const findMgmBldrgstPk = (exposData, dongNm, hoNm) => {
@@ -910,7 +956,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     service: 'multi-unit-building-service',
     timestamp: new Date().toISOString(),
-    version: '3.6.0',
+    version: '3.8.0',
     viewId: MULTI_UNIT_VIEW
   });
 });
@@ -1026,7 +1072,7 @@ app.get('/', (req, res) => {
   res.send(`
     <html>
     <head>
-        <title>집합건물 서비스 관리 v3.6</title>
+        <title>집합건물 서비스 관리 v3.8</title>
         <style>
             body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
             .button { display: inline-block; padding: 10px 20px; margin: 10px; 
@@ -1039,24 +1085,45 @@ app.get('/', (req, res) => {
         </style>
     </head>
     <body>
-        <h1>🏗️ 집합건물 서비스 관리 v3.6</h1>
+        <h1>🏗️ 집합건물 서비스 관리 v3.8</h1>
         
         <div class="info">
             <h3>📋 현재 설정</h3>
             <p><strong>뷰 ID:</strong> ${MULTI_UNIT_VIEW}</p>
             <p><strong>API 지연시간:</strong> ${API_DELAY/1000}초</p>
             <p><strong>스케줄:</strong> 1분마다 실행</p>
-        </div>
+            <p><strong>날짜 정보:</strong> 사용승인일, 주택가격기준일 (ISO 형식으로 변환)</p>
+            <p><strong>기타 정보:</strong> 용도지역, 주택가격, 대지지분</p>
 
-        <div class="fix">
-            <h3>🔧 v3.6 VWorld 대지지분 API 개선</h3>
-            <ul>
-                <li><strong>새로운 API 사용:</strong> ldaregList → buldSnList로 변경</li>
-                <li><strong>JSON 형식 처리:</strong> XML 대신 JSON으로 응답 처리</li>
-                <li><strong>정확한 동/호수 매칭:</strong> 0000동=단일동, 호수 정규화 매칭</li>
-                <li><strong>대지지분 정확도 향상:</strong> ldaQotaRate에서 앞 숫자만 추출</li>
-            </ul>
-        </div>
+// 호수 매칭 함수 개선 (유연한 매칭)
+const isHoMatch = (apiHo, inputHo) => {
+  if (!inputHo || !apiHo) return false;
+  
+  const apiHoStr = String(apiHo).trim();
+  const inputHoStr = String(inputHo).trim();
+  
+  // 1. 완전 일치 (우선순위 최고)
+  if (apiHoStr === inputHoStr) {
+    return true;
+  }
+  
+  // 2. 호수 부분만 추출해서 비교
+  const getHoNumber = (hoStr) => {
+    // "201호" → "201", "201" → "201" 
+    const match = hoStr.match(/(\d+)호?$/);
+    return match ? match[1] : hoStr.replace(/[^0-9]/g, '');
+  };
+  
+  const apiNumber = getHoNumber(apiHoStr);
+  const inputNumber = getHoNumber(inputHoStr);
+  
+  // 3. 숫자 부분이 일치하면 매칭 (201호 ↔ 201)
+  if (apiNumber && inputNumber && apiNumber === inputNumber) {
+    return true;
+  }
+  
+  return false;
+};
 
         <h3>🔧 관리 기능</h3>
         <a href="/health" class="button">상태 확인</a>
@@ -1081,12 +1148,12 @@ app.get('/', (req, res) => {
             <p><strong>기타 정보:</strong> 용도지역, 주택가격, 대지지분</p>
             <p><strong>날짜 정보:</strong> 사용승인일, 주택가격기준일 (ISO 형식으로 변환)</p>
         </div>
+        </div>
     </body>
     </html>
+
   `);
 });
-
-// 서버 시작
 app.listen(PORT, () => {
   logger.info('🚀 집합건물 서비스 v3.5 시작됨');
   logger.info(`📡 포트: ${PORT}`);
