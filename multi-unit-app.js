@@ -1073,16 +1073,16 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharac
     }
   }
   
-  // 5. VWorld 주택가격 정보 (수정: housingPriceData 사용)
-  if (housingPriceData) {
-    if (housingPriceData.주택가격만원 !== undefined) {
-      result["주택가격(만원)"] = housingPriceData.주택가격만원; // 숫자로 처리
+  // 5. VWorld 주택가격 정보 (수정: housingPrice 사용)
+  if (housingPrice) {
+    if (housingPrice.주택가격만원 !== undefined) {
+      result["주택가격(만원)"] = housingPrice.주택가격만원; // 숫자로 처리
     } else {
       result["주택가격(만원)"] = 0;
     }
     
-    if (housingPriceData.주택가격기준일) {
-      result["주택가격기준일"] = housingPriceData.주택가격기준일; // ISO 형식
+    if (housingPrice.주택가격기준일) {
+      result["주택가격기준일"] = housingPrice.주택가격기준일; // ISO 형식
     } else {
       result["주택가격기준일"] = '1900-01-01T00:00:00.000Z';
     }
@@ -1099,6 +1099,7 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharac
   return result;
 };
 
+// processMultiUnitBuildingRecord 함수 수정
 const processMultiUnitBuildingRecord = async (record) => {
   try {
     const 지번주소 = record['지번 주소'];
@@ -1127,7 +1128,7 @@ const processMultiUnitBuildingRecord = async (record) => {
     const startTime = Date.now();
     
     // 모든 API를 병렬로 동시 호출
-    const [recapData, titleData, areaData, exposData, landCharacteristics, landShare, housingPriceData] = await Promise.all([
+    const [recapData, titleData, areaData, exposData, landCharacteristics, landShare, housingPrice] = await Promise.all([
       getBuildingRecapInfo(buildingCodes),
       getBuildingTitleInfo(buildingCodes),
       getBuildingAreaInfo(buildingCodes, 동, 호수),
@@ -1143,9 +1144,9 @@ const processMultiUnitBuildingRecord = async (record) => {
     const apiTime = Date.now() - startTime;
     logger.info(`⚡ API 데이터 수집 완료 (${apiTime}ms)`);
 
-    // 5. 데이터 가공 - housingPriceData 올바르게 전달
+    // 5. 데이터 가공 - housingPrice 올바르게 전달
     const processedData = processMultiUnitBuildingData(
-      recapData, titleData, areaData, landCharacteristics, housingPriceData, landShare, 동, 호수
+      recapData, titleData, areaData, landCharacteristics, housingPrice, landShare, 동, 호수
     );
 
     if (Object.keys(processedData).length === 0) {
