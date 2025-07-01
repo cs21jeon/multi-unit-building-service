@@ -265,70 +265,174 @@ const getBuildingAreaInfo = async (codeData, dongNm, hoNm) => {
   try {
     await delay(API_DELAY);
     
-    // 동/호수 처리 - 원본 값 및 접미사 제거
-    const cleanDongNm = dongNm ? dongNm.replace(/동$/, '') : '';
-    const cleanHoNm = hoNm ? hoNm.replace(/호$/, '') : '';
+    // 1단계: 원본 동/호수로 조회
+    logger.info(`🏢 면적 정보 조회 시작 - 원본 동/호: 동='${dongNm || ""}', 호='${hoNm || ""}'`);
     
-    logger.info(`🏢 면적 정보 조회: 원본동='${dongNm}', 처리동='${cleanDongNm}', 원본호='${hoNm}', 처리호='${cleanHoNm}'`);
-    
-    const response = await axios.get('https://apis.data.go.kr/1613000/BldRgstHubService/getBrExposPubuseAreaInfo', {
+    const originalResponse = await axios.get('https://apis.data.go.kr/1613000/BldRgstHubService/getBrExposPubuseAreaInfo', {
       params: {
         serviceKey: PUBLIC_API_KEY,
         sigunguCd: codeData.시군구코드,
         bjdongCd: codeData.법정동코드,
         bun: codeData.번,
         ji: codeData.지,
-        dongNm: cleanDongNm,
-        hoNm: cleanHoNm,
+        dongNm: dongNm || '',
+        hoNm: hoNm || '',
         _type: 'json',
         numOfRows: 50,
         pageNo: 1
       },
       timeout: 30000
     });
-
-    // API URL 로깅
-    const apiUrl = `https://apis.data.go.kr/1613000/BldRgstHubService/getBrExposPubuseAreaInfo?serviceKey=${PUBLIC_API_KEY}&sigunguCd=${codeData.시군구코드}&bjdongCd=${codeData.법정동코드}&bun=${codeData.번}&ji=${codeData.지}&dongNm=${cleanDongNm}&hoNm=${cleanHoNm}&_type=json&numOfRows=50&pageNo=1`;
-    logger.debug(`🌐 면적 정보 호출 URL: ${apiUrl}`);
     
-    // 데이터가 있는지 확인
-    const totalCount = response.data?.response?.body?.totalCount || 0;
-    if (totalCount === 0 || totalCount === "0") {
-      logger.warn(`⚠️ 면적 정보 데이터 없음 (totalCount: ${totalCount}). 다른 형태로 재시도...`);
-      
-      // 숫자만 추출하여 재시도
-      const numericDong = extractNumbersOnly(dongNm);
-      const numericHo = extractNumbersOnly(hoNm);
-      
-      // 재시도 로그
-      logger.info(`🔄 면적 정보 재시도: 숫자동='${numericDong}', 숫자호='${numericHo}'`);
-      
-      const retryResponse = await axios.get('https://apis.data.go.kr/1613000/BldRgstHubService/getBrExposPubuseAreaInfo', {
-        params: {
-          serviceKey: PUBLIC_API_KEY,
-          sigunguCd: codeData.시군구코드,
-          bjdongCd: codeData.법정동코드,
-          bun: codeData.번,
-          ji: codeData.지,
-          dongNm: numericDong,
-          hoNm: numericHo,
-          _type: 'json',
-          numOfRows: 50,
-          pageNo: 1
-        },
-        timeout: 30000
-      });
-      
-      // 재시도 결과 로깅
-      const retryTotalCount = retryResponse.data?.response?.body?.totalCount || 0;
-      logger.info(`♻️ 면적 정보 재시도 결과: totalCount=${retryTotalCount}`);
-      
-      return retryResponse.data;
+    const originalTotalCount = originalResponse.data?.response?.body?.totalCount || 0;
+    logger.info(`1단계 면적 정보 조회 결과: totalCount=${originalTotalCount}`);
+    
+    if (originalTotalCount > 0) {
+      logger.info(`✅ 1단계 면적 정보 조회 성공 - 원본 동/호 사용`);
+      return originalResponse.data;
     }
     
-    return response.data;
+    // 2단계: 숫자만 추출하여 조회
+    if (dongNm || hoNm) {
+      const numericDong = extractNumbersOnly(dongNm || '');
+      const numericHo = extractNumbersOnly(hoNm || '');
+      
+      logger.info(`🔄 2단계 면적 정보 조회 시도 - 숫자만 추출: 동='${numericDong}', 호='${numericHo}'`);
+      
+      // 숫자 값이 있을 때만 시도
+      if (numericDong || numericHo) {
+        const numericResponse = await axios.get('https://apis.data.go.kr/1613000/BldRgstHubService/getBrExposPubuseAreaInfo', {
+          params: {
+            serviceKey: PUBLIC_API_KEY,
+            sigunguCd: codeData.시군구코드,
+            bjdongCd: codeData.법정동코드,
+            bun: codeData.번,
+            ji: codeData.지,
+            dongNm: numericDong,
+            hoNm: numericHo,
+            _type: 'json',
+            numOfRows: 50,
+            pageNo: 1
+          },
+          timeout: 30000
+        });
+        
+        const numericTotalCount = numericResponse.data?.response?.body?.totalCount || 0;
+        logger.info(`2단계 면적 정보 조회 결과: totalCount=${numericTotalCount}`);
+        
+        if (numericTotalCount > 0) {
+          logger.info(`✅ 2단계 면적 정보 조회 성공 - 숫자만 추출 사용`);
+          return numericResponse.data;
+        }
+      }
+    }
+    
+    // 3단계: 동/호 파라미터 없이 조회 (마지막 시도)
+    logger.info(`🔄 3단계 면적 정보 조회 시도 - 동/호 파라미터 없이`);
+    
+    const fallbackResponse = await axios.get('https://apis.data.go.kr/1613000/BldRgstHubService/getBrExposPubuseAreaInfo', {
+      params: {
+        serviceKey: PUBLIC_API_KEY,
+        sigunguCd: codeData.시군구코드,
+        bjdongCd: codeData.법정동코드,
+        bun: codeData.번,
+        ji: codeData.지,
+        _type: 'json',
+        numOfRows: 100,  // 더 많은 결과를 가져옴
+        pageNo: 1
+      },
+      timeout: 30000
+    });
+    
+    const fallbackTotalCount = fallbackResponse.data?.response?.body?.totalCount || 0;
+    logger.info(`3단계 면적 정보 조회 결과: totalCount=${fallbackTotalCount}`);
+    
+    if (fallbackTotalCount > 0) {
+      // 결과가 있으면, 후처리로 동/호수 필터링 시도
+      const allItems = extractItems(fallbackResponse.data);
+      logger.info(`전체 면적 정보 항목 수: ${allItems.length}`);
+      
+      // 로깅을 위해 처음 몇 개 항목만 출력
+      const sampleSize = Math.min(allItems.length, 5);
+      logger.info(`면적 정보 샘플 (${sampleSize}개):`);
+      for (let i = 0; i < sampleSize; i++) {
+        const item = allItems[i];
+        logger.info(`- 항목 ${i+1}: 동=${item.dongNm || '없음'}, 호=${item.hoNm || '없음'}, 면적=${item.area || '0'}`);
+      }
+      
+      // 동/호로 필터링 시도 (여러 변형 사용)
+      let matchedItems = [];
+      
+      // 호수로 매칭 시도 (우선순위)
+      if (hoNm) {
+        const hoVariations = [
+          hoNm,
+          hoNm.replace(/호$/, ''),
+          extractNumbersOnly(hoNm),
+          hoNm.replace(/층/, '')
+        ].filter(v => v); // 빈 값 제거
+        
+        for (const hoVar of hoVariations) {
+          const matched = allItems.filter(item => 
+            item.hoNm === hoVar || 
+            extractNumbersOnly(item.hoNm || '') === extractNumbersOnly(hoVar)
+          );
+          
+          if (matched.length > 0) {
+            matchedItems = matched;
+            logger.info(`✅ 호수 '${hoVar}'로 ${matched.length}개 항목 매칭 성공`);
+            break;
+          }
+        }
+      }
+      
+      // 호수로 매칭 실패하고 동이 있으면 동으로 매칭 시도
+      if (matchedItems.length === 0 && dongNm) {
+        const dongVariations = [
+          dongNm,
+          dongNm.replace(/동$/, ''),
+          extractNumbersOnly(dongNm)
+        ].filter(v => v); // 빈 값 제거
+        
+        for (const dongVar of dongVariations) {
+          const matched = allItems.filter(item => 
+            item.dongNm === dongVar || 
+            extractNumbersOnly(item.dongNm || '') === extractNumbersOnly(dongVar)
+          );
+          
+          if (matched.length > 0) {
+            matchedItems = matched;
+            logger.info(`✅ 동 '${dongVar}'로 ${matched.length}개 항목 매칭 성공`);
+            break;
+          }
+        }
+      }
+      
+      if (matchedItems.length > 0) {
+        // 매칭된 항목만 포함한 응답 구성
+        const filteredResponse = {...fallbackResponse.data};
+        if (filteredResponse.response && filteredResponse.response.body) {
+          filteredResponse.response.body.items.item = matchedItems.length === 1 ? matchedItems[0] : matchedItems;
+          filteredResponse.response.body.totalCount = String(matchedItems.length);
+          logger.info(`✅ 3단계 면적 정보 조회 성공 - 후처리 필터링 사용`);
+          return filteredResponse;
+        }
+      }
+      
+      // 필터링 실패했지만 전체 데이터는 있는 경우
+      logger.warn(`⚠️ 동/호 필터링 실패했지만 전체 데이터 반환 (${fallbackTotalCount}개 항목)`);
+      return fallbackResponse.data;
+    }
+    
+    // 모든 시도 실패 시 null 반환 (중요: 0이 아닌 null 반환)
+    logger.warn(`❌ 모든 단계에서 면적 정보 조회 실패`);
+    return null;
   } catch (error) {
     logger.error('getBuildingAreaInfo 실패:', error.message);
+    if (error.response) {
+      logger.error('API 응답 상태:', error.response.status);
+      logger.error('API 응답 데이터:', JSON.stringify(error.response.data, null, 2).substring(0, 500) + '...');
+    }
     return null;
   }
 };
@@ -890,8 +994,9 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharac
   }
   
   // 3. 면적 정보 (공통) - 항상 포함
-  let 전용면적 = 0;
+  let 전용면적 = null;  // null로 초기화
   let 공용면적 = 0;
+  let 공급면적 = null;  // null로 초기화
 
   if (areaData) {
     const areaItems = extractItems(areaData);
@@ -903,25 +1008,46 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharac
         logger.debug(`면적 항목 ${idx+1}: 유형=${item.exposPubuseGbCdNm || '없음'}, 면적=${item.area || '0'}`);
       });
       
+      let tempArea전용 = 0;
+      let tempArea공용 = 0;
+      
       areaItems.forEach(item => {
         const area = parseFloat(item.area) || 0;
         if (item.mainAtchGbCdNm === "주건축물" && item.exposPubuseGbCdNm === "전유") {
-          전용면적 += area;
-          logger.info(`전용면적 추가: +${area}㎡ (총 ${전용면적}㎡)`);
+          tempArea전용 += area;
+          logger.info(`전용면적 추가: +${area}㎡ (총 ${tempArea전용}㎡)`);
         } else if (item.mainAtchGbCdNm === "주건축물" && item.exposPubuseGbCdNm === "공용") {
-          공용면적 += area;
-          logger.info(`공용면적 추가: +${area}㎡ (총 ${공용면적}㎡)`);
+          tempArea공용 += area;
+          logger.info(`공용면적 추가: +${area}㎡ (총 ${tempArea공용}㎡)`);
         }
       });
+      
+      // 실제 값이 있을 때만 설정
+      if (tempArea전용 > 0) {
+        전용면적 = tempArea전용;
+      }
+      
+      공용면적 = tempArea공용; // 공용면적은 에어테이블에 저장하지 않음
+      
+      // 전용면적이 있을 때만 공급면적 계산
+      if (전용면적 !== null) {
+        공급면적 = 전용면적 + 공용면적;
+      }
     } else {
       logger.warn(`⚠️ 면적 정보 항목이 없습니다`);
     }
   }
 
-  // 항상 면적 정보 포함 (값이 없으면 0으로 설정)
-  result["전용면적(㎡)"] = 전용면적;
-  result["공급면적(㎡)"] = 전용면적 + 공용면적;
-  logger.info(`📊 최종 면적 정보: 전용=${전용면적}㎡, 공용=${공용면적}㎡, 공급=${전용면적 + 공용면적}㎡`);
+  // 면적 정보가 있을 때만 결과에 포함
+  if (전용면적 !== null) {
+    result["전용면적(㎡)"] = 전용면적;
+  }
+
+  if (공급면적 !== null) {
+    result["공급면적(㎡)"] = 공급면적;
+  }
+
+  logger.info(`📊 최종 면적 정보: 전용=${전용면적 !== null ? 전용면적 : '없음'}㎡, 공용=${공용면적}㎡, 공급=${공급면적 !== null ? 공급면적 : '없음'}㎡`);
   
   // 4. VWorld 토지특성 정보 (용도지역, 토지면적)
   if (landCharacteristics) {
@@ -1025,15 +1151,23 @@ const processMultiUnitBuildingRecord = async (record) => {
       }
     });
 
-    // 필수 필드 확인 (모든 필수 필드가 포함되어 있는지)
-    const requiredFields = ["전용면적(㎡)", "공급면적(㎡)", "주택가격(만원)", "주택가격기준년도", "대지지분(㎡)"];
+    // 필수 필드 확인 (전용면적과 공급면적은 예외 처리)
+    const requiredFields = ["주택가격(만원)", "주택가격기준년도", "대지지분(㎡)"];
+    const optionalFields = ["전용면적(㎡)", "공급면적(㎡)"];
     let missingFields = [];
 
+    // 필수 필드는 무조건 0으로 설정
     requiredFields.forEach(field => {
       if (updateData[field] === undefined) {
         updateData[field] = 0; // 없는 필드는 0으로 설정
         missingFields.push(field);
       }
+    });
+
+    // 선택적 필드는 데이터가 있을 때만 설정 (없으면 건너뜀)
+    optionalFields.forEach(field => {
+      // 이미 updateData에 있으면 아무것도 하지 않음
+      // 없으면 그냥 건너뜀 (0으로 설정하지 않음)
     });
 
     if (missingFields.length > 0) {
