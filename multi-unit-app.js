@@ -260,9 +260,16 @@ const getBuildingTitleInfo = async (codeData) => {
   }
 };
 
+// 면적 정보 조회 함수 수정
 const getBuildingAreaInfo = async (codeData, dongNm, hoNm) => {
   try {
     await delay(API_DELAY);
+    
+    // 동/호수 처리 - 원본 값 및 접미사 제거
+    const cleanDongNm = dongNm ? dongNm.replace(/동$/, '') : '';
+    const cleanHoNm = hoNm ? hoNm.replace(/호$/, '') : '';
+    
+    logger.info(`🏢 면적 정보 조회: 원본동='${dongNm}', 처리동='${cleanDongNm}', 원본호='${hoNm}', 처리호='${cleanHoNm}'`);
     
     const response = await axios.get('https://apis.data.go.kr/1613000/BldRgstHubService/getBrExposPubuseAreaInfo', {
       params: {
@@ -271,8 +278,8 @@ const getBuildingAreaInfo = async (codeData, dongNm, hoNm) => {
         bjdongCd: codeData.법정동코드,
         bun: codeData.번,
         ji: codeData.지,
-        dongNm: dongNm || '',
-        hoNm: hoNm || '',
+        dongNm: cleanDongNm,
+        hoNm: cleanHoNm,
         _type: 'json',
         numOfRows: 50,
         pageNo: 1
@@ -280,6 +287,45 @@ const getBuildingAreaInfo = async (codeData, dongNm, hoNm) => {
       timeout: 30000
     });
 
+    // API URL 로깅
+    const apiUrl = `https://apis.data.go.kr/1613000/BldRgstHubService/getBrExposPubuseAreaInfo?serviceKey=${PUBLIC_API_KEY}&sigunguCd=${codeData.시군구코드}&bjdongCd=${codeData.법정동코드}&bun=${codeData.번}&ji=${codeData.지}&dongNm=${cleanDongNm}&hoNm=${cleanHoNm}&_type=json&numOfRows=50&pageNo=1`;
+    logger.debug(`🌐 면적 정보 호출 URL: ${apiUrl}`);
+    
+    // 데이터가 있는지 확인
+    const totalCount = response.data?.response?.body?.totalCount || 0;
+    if (totalCount === 0 || totalCount === "0") {
+      logger.warn(`⚠️ 면적 정보 데이터 없음 (totalCount: ${totalCount}). 다른 형태로 재시도...`);
+      
+      // 숫자만 추출하여 재시도
+      const numericDong = extractNumbersOnly(dongNm);
+      const numericHo = extractNumbersOnly(hoNm);
+      
+      // 재시도 로그
+      logger.info(`🔄 면적 정보 재시도: 숫자동='${numericDong}', 숫자호='${numericHo}'`);
+      
+      const retryResponse = await axios.get('https://apis.data.go.kr/1613000/BldRgstHubService/getBrExposPubuseAreaInfo', {
+        params: {
+          serviceKey: PUBLIC_API_KEY,
+          sigunguCd: codeData.시군구코드,
+          bjdongCd: codeData.법정동코드,
+          bun: codeData.번,
+          ji: codeData.지,
+          dongNm: numericDong,
+          hoNm: numericHo,
+          _type: 'json',
+          numOfRows: 50,
+          pageNo: 1
+        },
+        timeout: 30000
+      });
+      
+      // 재시도 결과 로깅
+      const retryTotalCount = retryResponse.data?.response?.body?.totalCount || 0;
+      logger.info(`♻️ 면적 정보 재시도 결과: totalCount=${retryTotalCount}`);
+      
+      return retryResponse.data;
+    }
+    
     return response.data;
   } catch (error) {
     logger.error('getBuildingAreaInfo 실패:', error.message);
@@ -542,6 +588,50 @@ const tryGetHousingPrice = async (pnu, dongNm, hoNm) => {
 // 대지지분 조회 함수 수정
 const getLandShareInfo = async (pnu, dongNm, hoNm) => {
   try {
+    logger.info(`🌍 VWorld 대지지분 정보 조회 시작 - PNU: ${pnu}, 동: ${dongNm}, 호: ${hoNm}`);
+    
+    // 동/호수 변형 생성
+    const { dongVariations, hoVariations } = processDongHo(dongNm, hoNm);
+    
+    // 동이름이 없는 경우를 위해 "0000" 추가
+    if (!dongNm || dongNm.trim() === '') {
+      dongVariations.push("0000");
+    }
+    
+    // 여러 변형을 순차적으로 시도
+    for (const processDong of dongVariations) {
+      for (const processHo of hoVariations) {
+        logger.info(`대지지분 시도: 동='${processDong}', 호='${processHo}'`);
+        
+        // 현재 조합으로 시도
+        const result = await tryGetLandShare(pnu, processDong, processHo);
+        if (result !== null) {
+          logger.info(`✅ 대지지분 성공: 동='${processDong}', 호='${processHo}', 지분=${result}`);
+          return result;
+        }
+      }
+    }
+    
+    // 동 파라미터 없이 다시 시도 (최후의 시도)
+    logger.info(`🔄 동 파라미터 없이 대지지분 재시도...`);
+    const resultWithoutDong = await tryGetLandShare(pnu, '', hoVariations[0]);
+    if (resultWithoutDong !== null) {
+      logger.info(`✅ 대지지분 성공 (동 파라미터 없이): 호='${hoVariations[0]}', 지분=${resultWithoutDong}`);
+      return resultWithoutDong;
+    }
+    
+    // 모든 시도 실패 시
+    logger.warn(`❌ 모든 동/호 변형으로 대지지분 조회 실패`);
+    return null;
+  } catch (error) {
+    logger.error(`❌ VWorld 대지지분 조회 실패 (PNU: ${pnu}):`, error.message);
+    return null;
+  }
+};
+
+// 대지지분 단일 시도 함수 수정
+const tryGetLandShare = async (pnu, dongNm, hoNm) => {
+  try {
     await delay(API_DELAY);
     
     // API 파라미터 구성
@@ -802,23 +892,36 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharac
   // 3. 면적 정보 (공통) - 항상 포함
   let 전용면적 = 0;
   let 공용면적 = 0;
-  
+
   if (areaData) {
     const areaItems = extractItems(areaData);
+    logger.info(`📏 면적 정보 항목 수: ${areaItems.length}`);
     
-    areaItems.forEach(item => {
-      const area = parseFloat(item.area) || 0;
-      if (item.mainAtchGbCdNm === "주건축물" && item.exposPubuseGbCdNm === "전유") {
-        전용면적 += area;
-      } else if (item.mainAtchGbCdNm === "주건축물" && item.exposPubuseGbCdNm === "공용") {
-        공용면적 += area;
-      }
-    });
+    if (areaItems.length > 0) {
+      // 항목 정보 로깅
+      areaItems.forEach((item, idx) => {
+        logger.debug(`면적 항목 ${idx+1}: 유형=${item.exposPubuseGbCdNm || '없음'}, 면적=${item.area || '0'}`);
+      });
+      
+      areaItems.forEach(item => {
+        const area = parseFloat(item.area) || 0;
+        if (item.mainAtchGbCdNm === "주건축물" && item.exposPubuseGbCdNm === "전유") {
+          전용면적 += area;
+          logger.info(`전용면적 추가: +${area}㎡ (총 ${전용면적}㎡)`);
+        } else if (item.mainAtchGbCdNm === "주건축물" && item.exposPubuseGbCdNm === "공용") {
+          공용면적 += area;
+          logger.info(`공용면적 추가: +${area}㎡ (총 ${공용면적}㎡)`);
+        }
+      });
+    } else {
+      logger.warn(`⚠️ 면적 정보 항목이 없습니다`);
+    }
   }
-  
+
   // 항상 면적 정보 포함 (값이 없으면 0으로 설정)
   result["전용면적(㎡)"] = 전용면적;
   result["공급면적(㎡)"] = 전용면적 + 공용면적;
+  logger.info(`📊 최종 면적 정보: 전용=${전용면적}㎡, 공용=${공용면적}㎡, 공급=${전용면적 + 공용면적}㎡`);
   
   // 4. VWorld 토지특성 정보 (용도지역, 토지면적)
   if (landCharacteristics) {
@@ -895,7 +998,7 @@ const processMultiUnitBuildingRecord = async (record) => {
       pnu ? getLandShareInfo(pnu, 동, 호수) : Promise.resolve(null),
       pnu ? getHousingPriceInfo(pnu, 동, 호수) : Promise.resolve({ 
         주택가격만원: 0, 
-        주택가격기준년도: 0  // 수정: 주택가격기준일 -> 주택가격기준년도
+        주택가격기준년도: 0
       })
     ]);
     
