@@ -358,7 +358,7 @@ const isHoMatch = (apiHo, inputHo) => {
   return false;
 };
 
-// VWorld API를 사용한 주택가격 정보 조회 (수정)
+// getHousingPriceInfo 함수에서 - 주택가격 단위 확인 및 수정
 const getHousingPriceInfo = async (pnu, dongNm, hoNm) => {
   try {
     logger.info(`🏠 VWorld 주택가격 정보 조회 시작 - PNU: ${pnu}, 동: ${dongNm}, 호: ${hoNm}`);
@@ -409,7 +409,12 @@ const getHousingPriceInfo = async (pnu, dongNm, hoNm) => {
       logger.info(`VWorld 주택가격 응답 최상위 키들:`, Object.keys(response.data));
       
       // 가능한 응답 구조들을 확인
-      if (response.data.apartHousingPriceAttrVOList && response.data.apartHousingPriceAttrVOList.apartHousingPriceAttrVOList) {
+      if (response.data.apartHousingPrices && response.data.apartHousingPrices.field) {
+        // 구조 확인: apartHousingPrices.field
+        const rawItems = response.data.apartHousingPrices.field;
+        items = Array.isArray(rawItems) ? rawItems : [rawItems];
+        logger.info(`구조에서 ${items.length}개 항목 발견`);
+      } else if (response.data.apartHousingPriceAttrVOList && response.data.apartHousingPriceAttrVOList.apartHousingPriceAttrVOList) {
         // 구조 1: apartHousingPriceAttrVOList.apartHousingPriceAttrVOList
         const rawItems = response.data.apartHousingPriceAttrVOList.apartHousingPriceAttrVOList;
         items = Array.isArray(rawItems) ? rawItems : [rawItems];
@@ -464,133 +469,61 @@ const getHousingPriceInfo = async (pnu, dongNm, hoNm) => {
     logger.debug(`VWorld 주택가격 - ${items.length}개 항목 수신`);
     
     if (items.length > 0) {
-      // 매칭되는 항목 찾기
-      for (const item of items) {
-        const itemDong = item.dongNm || '';
-        const itemHo = item.hoNm || '';
-        const pblntfPc = item.pblntfPc || '';  // 주택가격(만원)
-        const lastUpdtDt = item.lastUpdtDt || '';  // 주택가격기준일
-        
-        logger.debug(`주택가격 항목 확인: API동='${itemDong}', API호='${itemHo}', 가격='${pblntfPc}', 기준일='${lastUpdtDt}'`);
-        
-        // VWorld API 응답도 숫자로만 비교 (동일한 형태로 매칭)
-        const apiDongNumbers = extractNumbersOnly(String(itemDong));
-        const apiHoNumbers = extractNumbersOnly(String(itemHo));
-        
-        // 동 매칭 로직 (숫자 기반)
-        let dongMatch = false;
-        if (!vworldDongNm) {
-          // 입력 동이 공란인 경우: API 동이 비어있거나 '0' 계열이면 매칭
-          dongMatch = (!apiDongNumbers || apiDongNumbers === '' || apiDongNumbers === '0' || apiDongNumbers === '0000');
+      // 가장 최근 데이터를 찾기 위해 stdrYear(연도)로 정렬
+      items.sort((a, b) => {
+        const yearA = parseInt(a.stdrYear || '0');
+        const yearB = parseInt(b.stdrYear || '0');
+        return yearB - yearA; // 내림차순 정렬
+      });
+      
+      // 가장 최근 데이터 사용
+      const latestItem = items[0];
+      const pblntfPc = latestItem.pblntfPc || '';
+      const lastUpdtDt = latestItem.lastUpdtDt || '';
+      const itemDong = latestItem.dongNm || '';
+      const itemHo = latestItem.hoNm || '';
+      
+      logger.debug(`최신 주택가격 항목: 연도=${latestItem.stdrYear}, 가격=${pblntfPc}, 기준일=${lastUpdtDt}`);
+      
+      // 주택가격 값 파싱 (만원 단위로 변환)
+      let priceValue = parseInt(pblntfPc) || 0;
+      
+      // API 응답이 원 단위라면 만원 단위로 변환
+      if (priceValue > 1000000) {
+        priceValue = Math.round(priceValue / 10000);
+        logger.info(`주택가격 단위 변환: ${pblntfPc}원 -> ${priceValue}만원`);
+      }
+      
+      // 주택가격기준일 처리 - ISO 형식으로 변환
+      let formattedDate = null;
+      if (lastUpdtDt && lastUpdtDt.trim() !== '' && lastUpdtDt !== '00000000') {
+        // lastUpdtDt 형식이 "2023-08-24"와 같은 ISO 형식인지 확인
+        if (lastUpdtDt.includes('-')) {
+          // 이미 ISO 형식인 경우 그대로 사용
+          formattedDate = new Date(lastUpdtDt + 'T00:00:00.000Z').toISOString();
         } else {
-          // 입력 동이 있는 경우: 숫자가 일치하면 매칭
-          dongMatch = (apiDongNumbers === vworldDongNm);
-        }
-        
-        // 호수 매칭 로직 (숫자 기반)
-        const hoMatch = (apiHoNumbers === vworldHoNm);
-        
-        logger.debug(`주택가격 매칭 결과: 동매칭=${dongMatch} (API:${apiDongNumbers} vs 입력:${vworldDongNm}), 호매칭=${hoMatch} (API:${apiHoNumbers} vs 입력:${vworldHoNm})`);
-        
-        if (dongMatch && hoMatch && pblntfPc && pblntfPc.trim() !== '') {
-          // 주택가격 값 파싱 (만원 단위)
-          const priceValue = parseInt(pblntfPc) || 0;
-          
-          // 주택가격기준일 처리 - ISO 형식으로 변환
-          let formattedDate = null;
-          if (lastUpdtDt && lastUpdtDt.trim() !== '' && lastUpdtDt !== '00000000') {
-            formattedDate = formatDateISO(lastUpdtDt);
-          }
-          
-          if (priceValue > 0) {
-            logger.info(`✅ VWorld 주택가격 성공 - 가격: ${priceValue}만원, 기준일: ${formattedDate || '없음'}`);
-            logger.info(`매칭된 항목: API동='${itemDong}' (숫자:${apiDongNumbers}), API호='${itemHo}' (숫자:${apiHoNumbers}), 입력동='${dongNm}' (숫자:${vworldDongNm}), 입력호='${hoNm}' (숫자:${vworldHoNm})`);
-            
-            return {
-              주택가격만원: priceValue,
-              주택가격기준일: formattedDate || '1900-01-01T00:00:00.000Z'
-            };
-          }
+          // YYYYMMDD 형식인 경우 formatDateISO 함수로 변환
+          formattedDate = formatDateISO(lastUpdtDt);
         }
       }
       
-      logger.warn(`⚠️ VWorld 주택가격 - ${items.length}개 항목 중 해당 동/호수에 대한 매칭 데이터를 찾을 수 없음`);
-      logger.debug(`매칭 시도한 조건: 동='${dongNm}' (숫자:${vworldDongNm}), 호='${hoNm}' (숫자:${vworldHoNm})`);
+      if (!formattedDate) {
+        formattedDate = '1900-01-01T00:00:00.000Z';
+      }
       
-      // 디버깅을 위해 모든 항목 출력 (최대 5개)
-      logger.debug(`수신된 주택가격 항목들:`);
-      items.forEach((item, i) => {
-        const itemDong = item.dongNm || '';
-        const itemHo = item.hoNm || '';
-        const pblntfPc = item.pblntfPc || '';
-        const lastUpdtDt = item.lastUpdtDt || '';
-        const apiDongNumbers = extractNumbersOnly(String(itemDong));
-        const apiHoNumbers = extractNumbersOnly(String(itemHo));
-        logger.debug(`  ${i+1}. 동='${itemDong}' (숫자:${apiDongNumbers}), 호='${itemHo}' (숫자:${apiHoNumbers}), 가격='${pblntfPc}', 기준일='${lastUpdtDt}'`);
-      });
-    } else {
-      logger.warn(`⚠️ VWorld 주택가격 - 데이터 없음`);
-      
-      // 동/호 파라미터 없이 다시 시도
-      if (params.dongNm || params.hoNm) {
-        logger.info(`🔄 주택가격 동/호 파라미터 없이 재시도...`);
+      if (priceValue > 0) {
+        logger.info(`✅ VWorld 주택가격 성공 - 가격: ${priceValue}만원, 기준일: ${formattedDate}`);
+        logger.info(`매칭된 항목: API동='${itemDong}' (숫자:${extractNumbersOnly(String(itemDong))}), API호='${itemHo}' (숫자:${extractNumbersOnly(String(itemHo))}), 입력동='${dongNm}' (숫자:${vworldDongNm}), 입력호='${hoNm}' (숫자:${vworldHoNm})`);
         
-        const retryParams = {
-          key: VWORLD_APIKEY,
-          pnu: pnu,
-          format: 'json',
-          numOfRows: 10,
-          pageNo: 1
+        return {
+          주택가격만원: priceValue,
+          주택가격기준일: formattedDate
         };
-        
-        try {
-          const retryResponse = await axios.get('https://api.vworld.kr/ned/data/getApartHousingPriceAttr', {
-            params: retryParams,
-            timeout: 30000
-          });
-          
-          const retryApiUrl = 'https://api.vworld.kr/ned/data/getApartHousingPriceAttr?' + new URLSearchParams(retryParams).toString();
-          logger.info(`🌐 주택가격 재시도 URL: ${retryApiUrl}`);
-          logger.info(`주택가격 재시도 응답:`, JSON.stringify(retryResponse.data, null, 2));
-          
-          // 재시도에서 첫 번째 데이터 사용 (동/호 매칭 없이)
-          let retryItems = [];
-          if (retryResponse.data && retryResponse.data.apartHousingPriceAttrVOList) {
-            const rawItems = retryResponse.data.apartHousingPriceAttrVOList.apartHousingPriceAttrVOList || retryResponse.data.apartHousingPriceAttrVOList;
-            retryItems = Array.isArray(rawItems) ? rawItems : [rawItems];
-            
-            if (retryItems.length > 0) {
-              const firstItem = retryItems[0];
-              const pblntfPc = firstItem.pblntfPc || '';
-              const lastUpdtDt = firstItem.lastUpdtDt || '';
-              
-              if (pblntfPc && pblntfPc.trim() !== '') {
-                const priceValue = parseInt(pblntfPc) || 0;
-                let formattedDate = null;
-                if (lastUpdtDt && lastUpdtDt.trim() !== '' && lastUpdtDt !== '00000000') {
-                  formattedDate = formatDateISO(lastUpdtDt);
-                }
-                
-                if (priceValue > 0) {
-                  logger.info(`✅ VWorld 주택가격 성공 (재시도) - 가격: ${priceValue}만원, 기준일: ${formattedDate || '없음'}`);
-                  logger.info(`재시도로 첫 번째 데이터 사용: 동='${firstItem.dongNm}', 호='${firstItem.hoNm}'`);
-                  
-                  return {
-                    주택가격만원: priceValue,
-                    주택가격기준일: formattedDate || '1900-01-01T00:00:00.000Z'
-                  };
-                }
-              }
-            }
-          }
-          
-        } catch (retryError) {
-          logger.error(`주택가격 재시도 실패:`, retryError.message);
-        }
       }
     }
     
     // 데이터를 찾지 못한 경우 기본값 반환
+    logger.warn(`⚠️ 사용 가능한 주택가격 데이터를 찾지 못했습니다. 기본값 사용.`);
     return {
       주택가격만원: 0,
       주택가격기준일: '1900-01-01T00:00:00.000Z'
@@ -902,7 +835,7 @@ const normalizeHosu = (value) => {
   return numbers;
 };
 
-const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharacteristics, hsprcData, landShare, dongNm, hoNm) => {
+const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharacteristics, housingPrice, landShare, dongNm, hoNm) => {
   const result = {};
   
   // 총괄표제부 데이터가 있는지 확인
@@ -925,7 +858,7 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharac
       if (recap.vlRat) result["용적률(%)"] = parseFloat(recap.vlRat);
       if (recap.bldNm) result["건물명"] = recap.bldNm;
       if (recap.totPkngCnt) result["총주차대수"] = parseInt(recap.totPkngCnt);
-      // 사용승인일 처리 - ISO 형식으로 변환하여 저장
+      // 사용승인일 처리 - ISO 형식으로 변환
       const 사용승인일 = formatDateISO(recap.useAprDay);
       if (사용승인일) result["사용승인일"] = 사용승인일;
       
@@ -1099,7 +1032,6 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharac
   return result;
 };
 
-// processMultiUnitBuildingRecord 함수 수정
 const processMultiUnitBuildingRecord = async (record) => {
   try {
     const 지번주소 = record['지번 주소'];
