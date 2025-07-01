@@ -363,25 +363,153 @@ const getHousingPriceInfo = async (pnu, dongNm, hoNm) => {
   try {
     logger.info(`🏠 VWorld 주택가격 정보 조회 시작 - PNU: ${pnu}, 동: ${dongNm}, 호: ${hoNm}`);
     
-    // 첫 번째 시도: 원본 동/호 사용
-    let result = await tryGetHousingPrice(pnu, dongNm, hoNm, false);
+    // VWorld API용 동/호수 숫자만 추출
+    const vworldDongNm = extractNumbersOnly(dongNm);
+    const vworldHoNm = extractNumbersOnly(hoNm);
     
-    // 데이터가 있으면 바로 반환
-    if (result && result.주택가격만원 > 0 && result.주택가격기준년도 > 0) {
-      return result;
+    logger.debug(`VWorld 주택가격 API 변환: 원본동='${dongNm}' -> VWorld동='${vworldDongNm}', 원본호='${hoNm}' -> VWorld호='${vworldHoNm}'`);
+    
+    await delay(API_DELAY);
+    
+    // API 파라미터 구성 - numOfRows를 30으로 증가
+    const params = {
+      key: VWORLD_APIKEY,
+      pnu: pnu,
+      format: 'json',
+      numOfRows: 30,  // 10 -> 30으로 증가
+      pageNo: 1
+    };
+    
+    // 동이름이 있을 때만 파라미터에 추가 (숫자만)
+    if (vworldDongNm) {
+      params.dongNm = vworldDongNm;
     }
     
-    // 첫 번째 시도가 실패한 경우, 숫자만 추출하여 다시 시도
-    logger.info(`🔄 원본 동/호로 주택가격 정보를 찾지 못함. 숫자 변환 후 재시도...`);
-    result = await tryGetHousingPrice(pnu, dongNm, hoNm, true);
-    
-    // 두 번째 시도도 성공하면 반환
-    if (result && result.주택가격만원 > 0 && result.주택가격기준년도 > 0) {
-      return result;
+    // 호수가 있을 때만 파라미터에 추가 (숫자만)
+    if (vworldHoNm) {
+      params.hoNm = vworldHoNm;
     }
     
-    // 모든 시도 실패 시 0 값 반환
-    logger.warn(`⚠️ 모든 시도에서 주택가격 정보를 찾을 수 없음. 0 값 반환.`);
+    const response = await axios.get('https://api.vworld.kr/ned/data/getApartHousingPriceAttr', {
+      params: params,
+      timeout: 30000
+    });
+
+    // API URL과 파라미터 로깅 (디버깅용)
+    const apiUrl = 'https://api.vworld.kr/ned/data/getApartHousingPriceAttr?' + new URLSearchParams(params).toString();
+    logger.info(`🌐 주택가격 실제 호출 URL: ${apiUrl}`);
+
+    logger.debug(`VWorld 주택가격 응답 상태: ${response.status}`);
+    logger.info(`VWorld 주택가격 전체 응답:`, JSON.stringify(response.data, null, 2));
+    
+    // 응답 구조 확인 및 데이터 추출
+    let items = [];
+    
+    if (response.data) {
+      logger.info(`VWorld 주택가격 응답 최상위 키들:`, Object.keys(response.data));
+      
+      // 가능한 응답 구조들을 확인
+      if (response.data.apartHousingPrices && response.data.apartHousingPrices.field) {
+        // 구조 확인: apartHousingPrices.field
+        const rawItems = response.data.apartHousingPrices.field;
+        items = Array.isArray(rawItems) ? rawItems : [rawItems];
+        logger.info(`구조에서 ${items.length}개 항목 발견`);
+      } else if (response.data.apartHousingPriceAttrVOList && response.data.apartHousingPriceAttrVOList.apartHousingPriceAttrVOList) {
+        // 구조 1: apartHousingPriceAttrVOList.apartHousingPriceAttrVOList
+        const rawItems = response.data.apartHousingPriceAttrVOList.apartHousingPriceAttrVOList;
+        items = Array.isArray(rawItems) ? rawItems : [rawItems];
+        logger.info(`구조 1에서 ${items.length}개 항목 발견`);
+      } else if (response.data.apartHousingPriceAttrVOList) {
+        // 구조 2: apartHousingPriceAttrVOList 직접
+        const rawItems = response.data.apartHousingPriceAttrVOList;
+        items = Array.isArray(rawItems) ? rawItems : [rawItems];
+        logger.info(`구조 2에서 ${items.length}개 항목 발견`);
+      } else if (response.data.results) {
+        // 구조 3: results
+        const rawItems = response.data.results;
+        items = Array.isArray(rawItems) ? rawItems : [rawItems];
+        logger.info(`구조 3에서 ${items.length}개 항목 발견`);
+      } else if (response.data.result) {
+        // 구조 4: result
+        const rawItems = response.data.result;
+        items = Array.isArray(rawItems) ? rawItems : [rawItems];
+        logger.info(`구조 4에서 ${items.length}개 항목 발견`);
+      } else if (Array.isArray(response.data)) {
+        // 구조 5: 직접 배열
+        items = response.data;
+        logger.info(`구조 5에서 ${items.length}개 항목 발견`);
+      } else {
+        // 예상치 못한 구조인 경우 모든 키 확인
+        logger.warn(`예상치 못한 응답 구조. 사용 가능한 키들:`, Object.keys(response.data));
+        
+        // 첫 번째 레벨에서 배열이나 객체 찾기
+        for (const key of Object.keys(response.data)) {
+          const value = response.data[key];
+          if (Array.isArray(value)) {
+            logger.info(`키 '${key}'에서 배열 발견: ${value.length}개 항목`);
+            items = value;
+            break;
+          } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+            logger.info(`키 '${key}'에서 객체 발견, 하위 키들:`, Object.keys(value));
+            // 하위 객체에서 배열 찾기
+            for (const subKey of Object.keys(value)) {
+              const subValue = value[subKey];
+              if (Array.isArray(subValue)) {
+                logger.info(`하위 키 '${key}.${subKey}'에서 배열 발견: ${subValue.length}개 항목`);
+                items = subValue;
+                break;
+              }
+            }
+            if (items.length > 0) break;
+          }
+        }
+      }
+    }
+    
+    logger.debug(`VWorld 주택가격 - ${items.length}개 항목 수신`);
+    
+    if (items.length > 0) {
+      // 가장 최근 데이터를 찾기 위해 stdrYear(연도)로 정렬
+      items.sort((a, b) => {
+        const yearA = parseInt(a.stdrYear || '0');
+        const yearB = parseInt(b.stdrYear || '0');
+        return yearB - yearA; // 내림차순 정렬 (최신순)
+      });
+      
+      // 가장 최근 데이터 사용
+      const latestItem = items[0];
+      const pblntfPc = latestItem.pblntfPc || '';
+      const stdrYear = latestItem.stdrYear || '';
+      const itemDong = latestItem.dongNm || '';
+      const itemHo = latestItem.hoNm || '';
+      
+      logger.debug(`최신 주택가격 항목: 연도=${stdrYear}, 가격=${pblntfPc}`);
+      
+      // 주택가격 값 파싱 (만원 단위로 변환)
+      let priceValue = parseInt(pblntfPc) || 0;
+      
+      // API 응답이 원 단위라면 만원 단위로 변환
+      if (priceValue > 1000000) {
+        priceValue = Math.round(priceValue / 10000);
+        logger.info(`주택가격 단위 변환: ${pblntfPc}원 -> ${priceValue}만원`);
+      }
+      
+      // 가격이 있고 연도가 있으면 결과 반환
+      if (priceValue > 0 && stdrYear) {
+        const yearValue = parseInt(stdrYear) || 0;
+        
+        logger.info(`✅ VWorld 주택가격 성공 - 가격: ${priceValue}만원, 기준년도: ${yearValue}`);
+        logger.info(`매칭된 항목: API동='${itemDong}' (숫자:${extractNumbersOnly(String(itemDong))}), API호='${itemHo}' (숫자:${extractNumbersOnly(String(itemHo))}), 입력동='${dongNm}' (숫자:${vworldDongNm}), 입력호='${hoNm}' (숫자:${vworldHoNm})`);
+        
+        return {
+          주택가격만원: priceValue,
+          주택가격기준년도: yearValue
+        };
+      }
+    }
+    
+    // 데이터를 찾지 못한 경우 기본값 반환
+    logger.warn(`⚠️ 사용 가능한 주택가격 데이터를 찾지 못했습니다. 기본값 사용.`);
     return {
       주택가격만원: 0,
       주택가격기준년도: 0
@@ -400,39 +528,254 @@ const getHousingPriceInfo = async (pnu, dongNm, hoNm) => {
   }
 };
 
-// VWorld API를 사용한 대지지분 정보 조회 - 원본/숫자 변환 두 가지 시도
+// VWorld API를 사용한 대지지분 정보 조회 - 숫자만 전달하도록 수정
 const getLandShareInfo = async (pnu, dongNm, hoNm) => {
   try {
     logger.info(`🌍 VWorld 대지지분 정보 조회 시작 - PNU: ${pnu}, 동: ${dongNm}, 호: ${hoNm}`);
     
-    // 첫 번째 시도: 원본 동/호 사용
-    let result = await tryGetLandShare(pnu, dongNm, hoNm, false);
+    // 동이름과 호수에서 숫자만 추출
+    const vworldDongNm = extractNumbersOnly(dongNm);
+    const vworldHoNm = extractNumbersOnly(hoNm);
     
-    // 데이터가 있으면 바로 반환
-    if (result !== null && result > 0) {
-      return result;
+    logger.debug(`VWorld 대지지분 API 변환: 원본동='${dongNm}' -> VWorld동='${vworldDongNm}', 원본호='${hoNm}' -> VWorld호='${vworldHoNm}'`);
+    
+    await delay(API_DELAY);
+    
+    // API 파라미터 구성
+    const params = {
+      key: VWORLD_APIKEY,
+      pnu: pnu,
+      format: 'json',
+      numOfRows: 10,
+      pageNo: 1
+    };
+    
+    // 동이름이 있을 때만 파라미터에 추가 (숫자만)
+    if (vworldDongNm) {
+      params.buldDongNm = vworldDongNm;
     }
     
-    // 첫 번째 시도가 실패한 경우, 숫자만 추출하여 다시 시도
-    logger.info(`🔄 원본 동/호로 대지지분 정보를 찾지 못함. 숫자 변환 후 재시도...`);
-    result = await tryGetLandShare(pnu, dongNm, hoNm, true);
-    
-    // 두 번째 시도도 성공하면 반환
-    if (result !== null && result > 0) {
-      return result;
+    // 호수가 있을 때만 파라미터에 추가 (숫자만)
+    if (vworldHoNm) {
+      params.buldHoNm = vworldHoNm;
     }
     
-    // 모든 시도 실패 시 0 반환
-    logger.warn(`⚠️ 모든 시도에서 대지지분 정보를 찾을 수 없음. 0 값 반환.`);
-    return 0;
+    const response = await axios.get('https://api.vworld.kr/ned/data/buldRlnmList', {
+      params: params,
+      timeout: 30000
+    });
+
+    // API URL과 파라미터 로깅 (디버깅용)
+    const apiUrl = 'https://api.vworld.kr/ned/data/buldRlnmList?' + new URLSearchParams(params).toString();
+    logger.info(`🌐 실제 호출 URL: ${apiUrl}`);
+
+    logger.debug(`VWorld 대지지분 응답 상태: ${response.status}`);
+    logger.info(`VWorld 대지지분 전체 응답:`, JSON.stringify(response.data, null, 2));
+    
+    // 응답 구조 확인 및 데이터 추출
+    let items = [];
+    
+    if (response.data) {
+      logger.info(`VWorld 대지지분 응답 최상위 키들:`, Object.keys(response.data));
+      
+      // 가능한 응답 구조들을 확인
+      if (response.data.buldRlnmVOList && response.data.buldRlnmVOList.buldRlnmVOList) {
+        // 구조 1: buldRlnmVOList.buldRlnmVOList
+        const rawItems = response.data.buldRlnmVOList.buldRlnmVOList;
+        items = Array.isArray(rawItems) ? rawItems : [rawItems];
+        logger.info(`구조 1에서 ${items.length}개 항목 발견`);
+      } else if (response.data.buldRlnmVOList) {
+        // 구조 2: buldRlnmVOList 직접
+        const rawItems = response.data.buldRlnmVOList;
+        items = Array.isArray(rawItems) ? rawItems : [rawItems];
+        logger.info(`구조 2에서 ${items.length}개 항목 발견`);
+      } else if (response.data.ldaregVOList && response.data.ldaregVOList.ldaregVOList) {
+        // 구조 3: ldaregVOList.ldaregVOList
+        const rawItems = response.data.ldaregVOList.ldaregVOList;
+        items = Array.isArray(rawItems) ? rawItems : [rawItems];
+        logger.info(`구조 3에서 ${items.length}개 항목 발견`);
+      } else if (response.data.results) {
+        // 구조 4: results
+        const rawItems = response.data.results;
+        items = Array.isArray(rawItems) ? rawItems : [rawItems];
+        logger.info(`구조 4에서 ${items.length}개 항목 발견`);
+      } else if (response.data.result) {
+        // 구조 5: result
+        const rawItems = response.data.result;
+        items = Array.isArray(rawItems) ? rawItems : [rawItems];
+        logger.info(`구조 5에서 ${items.length}개 항목 발견`);
+      } else if (Array.isArray(response.data)) {
+        // 구조 6: 직접 배열
+        items = response.data;
+        logger.info(`구조 6에서 ${items.length}개 항목 발견`);
+      } else {
+        // 예상치 못한 구조인 경우 모든 키 확인
+        logger.warn(`예상치 못한 응답 구조. 사용 가능한 키들:`, Object.keys(response.data));
+        
+        // 첫 번째 레벨에서 배열이나 객체 찾기
+        for (const key of Object.keys(response.data)) {
+          const value = response.data[key];
+          if (Array.isArray(value)) {
+            logger.info(`키 '${key}'에서 배열 발견: ${value.length}개 항목`);
+            items = value;
+            break;
+          } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+            logger.info(`키 '${key}'에서 객체 발견, 하위 키들:`, Object.keys(value));
+            // 하위 객체에서 배열 찾기
+            for (const subKey of Object.keys(value)) {
+              const subValue = value[subKey];
+              if (Array.isArray(subValue)) {
+                logger.info(`하위 키 '${key}.${subKey}'에서 배열 발견: ${subValue.length}개 항목`);
+                items = subValue;
+                break;
+              }
+            }
+            if (items.length > 0) break;
+          }
+        }
+      }
+    }
+    
+    logger.debug(`VWorld 대지지분 - ${items.length}개 항목 수신`);
+    
+    if (items.length > 0) {
+      // 매칭되는 항목 찾기
+      for (const item of items) {
+        const itemDong = item.buldDongNm || item.dongNm || '';
+        const itemHo = item.buldHoNm || item.hoNm || '';
+        const ldaQotaRate = item.ldaQotaRate || item.landShareRate || '';
+        
+        logger.debug(`항목 확인: API동='${itemDong}', API호='${itemHo}', 지분='${ldaQotaRate}'`);
+        
+        // 동 매칭 로직
+        let dongMatch = false;
+        if (!vworldDongNm) {
+          // 입력 동이 공란인 경우: API 동이 비어있거나 '0000'이면 매칭
+          dongMatch = (!itemDong || itemDong.trim() === '' || itemDong === '0000');
+        } else {
+          // 입력 동이 있는 경우: 숫자만 추출하여 비교
+          const apiDongNumbers = extractNumbersOnly(String(itemDong));
+          dongMatch = (apiDongNumbers === vworldDongNm);
+        }
+        
+        // 호수 매칭 로직
+        const apiHoNumbers = extractNumbersOnly(String(itemHo));
+        const hoMatch = (apiHoNumbers === vworldHoNm);
+        
+        logger.debug(`매칭 결과: 동매칭=${dongMatch}, 호매칭=${hoMatch}`);
+        
+        if (dongMatch && hoMatch && ldaQotaRate && ldaQotaRate.trim() !== '') {
+          // 지분 값 파싱 (예: "123.45/1000000" -> 123.45)
+          const shareValue = parseFloat(ldaQotaRate.split('/')[0]);
+          if (!isNaN(shareValue)) {
+            logger.info(`✅ VWorld 대지지분 성공 - 지분: ${shareValue} (${ldaQotaRate})`);
+            logger.info(`매칭된 항목: API동='${itemDong}', API호='${itemHo}', 입력동='${dongNm}' (숫자:${vworldDongNm}), 입력호='${hoNm}' (숫자:${vworldHoNm})`);
+            return shareValue;
+          }
+        }
+      }
+      
+      logger.warn(`⚠️ VWorld 대지지분 - ${items.length}개 항목 중 해당 동/호수에 대한 매칭 데이터를 찾을 수 없음`);
+      logger.debug(`매칭 시도한 조건: 동='${dongNm}' (숫자:${vworldDongNm}), 호='${hoNm}' (숫자:${vworldHoNm})`);
+      
+      // 디버깅을 위해 모든 항목 출력
+      logger.debug(`수신된 모든 항목의 동/호 정보:`);
+      items.forEach((item, i) => {
+        const itemDong = item.buldDongNm || item.dongNm || '';
+        const itemHo = item.buldHoNm || item.hoNm || '';
+        const ldaQotaRate = item.ldaQotaRate || item.landShareRate || '';
+        logger.debug(`  ${i+1}. 동='${itemDong}', 호='${itemHo}', 지분='${ldaQotaRate}'`);
+      });
+    } else {
+      logger.warn(`⚠️ VWorld 대지지분 - 데이터 없음`);
+      
+      // 동/호 파라미터 없이 다시 시도
+      if (params.buldDongNm || params.buldHoNm) {
+        logger.info(`🔄 동/호 파라미터 없이 재시도...`);
+        
+        const retryParams = {
+          key: VWORLD_APIKEY,
+          pnu: pnu,
+          format: 'json',
+          numOfRows: 10,
+          pageNo: 1
+        };
+        
+        try {
+          const retryResponse = await axios.get('https://api.vworld.kr/ned/data/buldRlnmList', {
+            params: retryParams,
+            timeout: 30000
+          });
+          
+          const retryApiUrl = 'https://api.vworld.kr/ned/data/buldRlnmList?' + new URLSearchParams(retryParams).toString();
+          logger.info(`🌐 재시도 URL: ${retryApiUrl}`);
+          logger.info(`재시도 응답:`, JSON.stringify(retryResponse.data, null, 2));
+          
+          // 재시도 결과 처리
+          let retryItems = [];
+          if (retryResponse.data) {
+            // 재시도에서는 ldaregVOList 구조를 사용
+            if (retryResponse.data.ldaregVOList && retryResponse.data.ldaregVOList.ldaregVOList) {
+              const rawItems = retryResponse.data.ldaregVOList.ldaregVOList;
+              retryItems = Array.isArray(rawItems) ? rawItems : [rawItems];
+              logger.info(`재시도에서 ${retryItems.length}개 항목 발견`);
+              
+              // 재시도 데이터에서 매칭 시도
+              for (const item of retryItems) {
+                const itemDong = item.buldDongNm || '';
+                const itemHo = item.buldHoNm || '';
+                const ldaQotaRate = item.ldaQotaRate || '';
+                
+                logger.debug(`재시도 항목 확인: API동='${itemDong}', API호='${itemHo}', 지분='${ldaQotaRate}'`);
+                
+                // 동 매칭 로직
+                let dongMatch = false;
+                if (!vworldDongNm) {
+                  // 입력 동이 공란인 경우: API 동이 비어있거나 '0000'이면 매칭
+                  dongMatch = (!itemDong || itemDong.trim() === '' || itemDong === '0000');
+                } else {
+                  // 입력 동이 있는 경우: 숫자만 추출하여 비교
+                  const apiDongNumbers = extractNumbersOnly(String(itemDong));
+                  dongMatch = (apiDongNumbers === vworldDongNm);
+                }
+                
+                // 호수 매칭 로직
+                const apiHoNumbers = extractNumbersOnly(String(itemHo));
+                const hoMatch = (apiHoNumbers === vworldHoNm);
+                
+                logger.debug(`재시도 매칭 결과: 동매칭=${dongMatch}, 호매칭=${hoMatch}`);
+                
+                if (dongMatch && hoMatch && ldaQotaRate && ldaQotaRate.trim() !== '') {
+                  // 지분 값 파싱 (예: "40.5/243" -> 40.5)
+                  const shareValue = parseFloat(ldaQotaRate.split('/')[0]);
+                  if (!isNaN(shareValue)) {
+                    logger.info(`✅ VWorld 대지지분 성공 (재시도) - 지분: ${shareValue} (${ldaQotaRate})`);
+                    logger.info(`재시도 매칭된 항목: API동='${itemDong}', API호='${itemHo}', 입력동='${dongNm}' (숫자:${vworldDongNm}), 입력호='${hoNm}' (숫자:${vworldHoNm})`);
+                    return shareValue;
+                  }
+                }
+              }
+              
+              logger.warn(`⚠️ 재시도: ${retryItems.length}개 항목 중 매칭 데이터 없음`);
+            }
+          }
+          
+        } catch (retryError) {
+          logger.error(`재시도 실패:`, retryError.message);
+        }
+      }
+      
+      logger.debug(`전체 응답 구조:`, JSON.stringify(response.data, null, 2));
+    }
+    
+    return null;
   } catch (error) {
     logger.error(`❌ VWorld 대지지분 조회 실패 (PNU: ${pnu}):`, error.message);
     if (error.response) {
       logger.error(`VWorld API 응답 상태: ${error.response.status}`);
       logger.error(`VWorld API 응답 데이터:`, error.response.data);
     }
-    // 오류 발생 시에도 0 반환
-    return 0;
+    return null;
   }
 };
 
@@ -652,15 +995,22 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharac
     }
   }
   
-  // 5. VWorld 주택가격 정보 (수정: 값이 없으면 필드 자체를 설정하지 않음)
+  // 5. VWorld 주택가격 정보 (수정: 주택가격기준년도로 변경)
   if (housingPrice) {
-    if (housingPrice.주택가격만원 !== undefined && housingPrice.주택가격만원 > 0) {
+    if (housingPrice.주택가격만원 !== undefined) {
       result["주택가격(만원)"] = housingPrice.주택가격만원; // 숫자로 처리
+    } else {
+      result["주택가격(만원)"] = 0;
     }
     
-    if (housingPrice.주택가격기준년도 !== undefined && housingPrice.주택가격기준년도 > 0) {
+    if (housingPrice.주택가격기준년도 !== undefined) {
       result["주택가격기준년도"] = housingPrice.주택가격기준년도; // 숫자 타입
+    } else {
+      result["주택가격기준년도"] = 0;
     }
+  } else {
+    result["주택가격(만원)"] = 0;
+    result["주택가격기준년도"] = 0;
   }
   
   // 6. 대지지분 정보 (공통) - 숫자로 처리
@@ -729,7 +1079,6 @@ const processMultiUnitBuildingRecord = async (record) => {
     const updateData = {};
     Object.keys(processedData).forEach(key => {
       const value = processedData[key];
-      // null, undefined, 빈 문자열, 0 값은 제외하지만, 주택가격과 대지지분의 0은 포함
       if (value !== null && value !== undefined && value !== '') {
         updateData[key] = value;
       }
@@ -738,19 +1087,6 @@ const processMultiUnitBuildingRecord = async (record) => {
     if (Object.keys(updateData).length === 0) {
       logger.warn(`업데이트할 유효한 데이터가 없음: ${record.id}`);
       return false;
-    }
-
-    // 최종적으로 0 값 필드 추가 (모든 시도 실패 시)
-    if (!updateData["주택가격(만원)"] && housingPrice && housingPrice.주택가격만원 === 0) {
-      updateData["주택가격(만원)"] = 0;
-    }
-    
-    if (!updateData["주택가격기준년도"] && housingPrice && housingPrice.주택가격기준년도 === 0) {
-      updateData["주택가격기준년도"] = 0;
-    }
-    
-    if (!updateData["대지지분(㎡)"] && landShare === 0) {
-      updateData["대지지분(㎡)"] = 0;
     }
 
     logger.info(`📝 업데이트 예정 필드: ${Object.keys(updateData).join(', ')}`);
