@@ -358,7 +358,7 @@ const isHoMatch = (apiHo, inputHo) => {
   return false;
 };
 
-// VWorld API를 사용한 주택가격 정보 조회 (새로 추가)
+// VWorld API를 사용한 주택가격 정보 조회 (수정)
 const getHousingPriceInfo = async (pnu, dongNm, hoNm) => {
   try {
     logger.info(`🏠 VWorld 주택가격 정보 조회 시작 - PNU: ${pnu}, 동: ${dongNm}, 호: ${hoNm}`);
@@ -508,7 +508,7 @@ const getHousingPriceInfo = async (pnu, dongNm, hoNm) => {
             
             return {
               주택가격만원: priceValue,
-              주택가격기준일: formattedDate
+              주택가격기준일: formattedDate || '1900-01-01T00:00:00.000Z'
             };
           }
         }
@@ -577,7 +577,7 @@ const getHousingPriceInfo = async (pnu, dongNm, hoNm) => {
                   
                   return {
                     주택가격만원: priceValue,
-                    주택가격기준일: formattedDate
+                    주택가격기준일: formattedDate || '1900-01-01T00:00:00.000Z'
                   };
                 }
               }
@@ -590,9 +590,10 @@ const getHousingPriceInfo = async (pnu, dongNm, hoNm) => {
       }
     }
     
+    // 데이터를 찾지 못한 경우 기본값 반환
     return {
       주택가격만원: 0,
-      주택가격기준일: null
+      주택가격기준일: '1900-01-01T00:00:00.000Z'
     };
   } catch (error) {
     logger.error(`❌ VWorld 주택가격 조회 실패 (PNU: ${pnu}):`, error.message);
@@ -600,9 +601,10 @@ const getHousingPriceInfo = async (pnu, dongNm, hoNm) => {
       logger.error(`VWorld 주택가격 API 응답 상태: ${error.response.status}`);
       logger.error(`VWorld 주택가격 API 응답 데이터:`, error.response.data);
     }
+    // 오류 발생 시에도 기본값 반환
     return {
       주택가격만원: 0,
-      주택가격기준일: null
+      주택가격기준일: '1900-01-01T00:00:00.000Z'
     };
   }
 };
@@ -1071,19 +1073,22 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharac
     }
   }
   
-  // 5. VWorld 주택가격 정보 (기존 hsprcData 대신 housingPrice 사용)
-  if (housingPrice) {
-    if (housingPrice.주택가격만원 && housingPrice.주택가격만원 > 0) {
-      result["주택가격(만원)"] = housingPrice.주택가격만원; // 숫자로 처리
+  // 5. VWorld 주택가격 정보 (수정: housingPriceData 사용)
+  if (housingPriceData) {
+    if (housingPriceData.주택가격만원 !== undefined) {
+      result["주택가격(만원)"] = housingPriceData.주택가격만원; // 숫자로 처리
     } else {
       result["주택가격(만원)"] = 0;
     }
     
-    if (housingPrice.주택가격기준일) {
-      result["주택가격기준일"] = housingPrice.주택가격기준일; // ISO 형식
+    if (housingPriceData.주택가격기준일) {
+      result["주택가격기준일"] = housingPriceData.주택가격기준일; // ISO 형식
+    } else {
+      result["주택가격기준일"] = '1900-01-01T00:00:00.000Z';
     }
   } else {
     result["주택가격(만원)"] = 0;
+    result["주택가격기준일"] = '1900-01-01T00:00:00.000Z';
   }
   
   // 6. 대지지분 정보 (공통) - 숫자로 처리
@@ -1094,7 +1099,6 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharac
   return result;
 };
 
-// processMultiUnitBuildingRecord 함수 수정 - housingPrice 변수 사용 추가 
 const processMultiUnitBuildingRecord = async (record) => {
   try {
     const 지번주소 = record['지번 주소'];
@@ -1130,13 +1134,16 @@ const processMultiUnitBuildingRecord = async (record) => {
       getBuildingExposInfo(buildingCodes, 동, 호수),
       pnu ? getLandCharacteristics(pnu) : Promise.resolve({ 용도지역: null, 토지면적: null }),
       pnu ? getLandShareInfo(pnu, 동, 호수) : Promise.resolve(null),
-      pnu ? getHousingPriceInfo(pnu, 동, 호수) : Promise.resolve({ 주택가격만원: 0, 주택가격기준일: null })
+      pnu ? getHousingPriceInfo(pnu, 동, 호수) : Promise.resolve({ 
+        주택가격만원: 0, 
+        주택가격기준일: '1900-01-01T00:00:00.000Z' 
+      })
     ]);
     
     const apiTime = Date.now() - startTime;
     logger.info(`⚡ API 데이터 수집 완료 (${apiTime}ms)`);
 
-    // 5. 데이터 가공
+    // 5. 데이터 가공 - housingPriceData 올바르게 전달
     const processedData = processMultiUnitBuildingData(
       recapData, titleData, areaData, landCharacteristics, housingPriceData, landShare, 동, 호수
     );
