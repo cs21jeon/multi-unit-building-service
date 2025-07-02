@@ -162,9 +162,23 @@ const formatDateISO = (dateStr) => {
   return date.toISOString();
 };
 
-// 동/호수 처리 유틸리티 함수 추가
+// 호수에서 실제 호수 번호만 추출하는 함수 (새로 추가)
+const extractHoNumber = (hoStr) => {
+  if (!hoStr || typeof hoStr !== 'string') return '';
+  
+  // "1층201호", "지하1층B102호" 등에서 호수만 추출
+  const hoMatch = hoStr.match(/(\d+)호$/);
+  if (hoMatch) {
+    return hoMatch[1]; // 마지막 숫자호수만 반환 (201호 → 201)
+  }
+  
+  // "호"가 없는 경우 기존 로직 사용
+  return extractNumbersOnly(hoStr);
+};
+
+// 동/호수 처리 유틸리티 함수 수정
 const processDongHo = (dongNm, hoNm) => {
-  // 1. 동 처리
+  // 1. 동 처리 (기존과 동일)
   let dongVariations = [];
   if (dongNm && dongNm.trim() !== '') {
     // 원본 값 추가
@@ -185,21 +199,21 @@ const processDongHo = (dongNm, hoNm) => {
     dongVariations.push(''); // 빈 값도 시도
   }
   
-  // 2. 호수 처리
+  // 2. 호수 처리 (수정됨)
   let hoVariations = [];
   if (hoNm && hoNm.trim() !== '') {
     // 원본 값 추가
     hoVariations.push(hoNm.trim());
     
-    // 숫자만 추출한 값 추가 (없으면 빈 문자열)
-    const hoNumbers = extractNumbersOnly(hoNm);
-    if (hoNumbers !== hoNm.trim()) {
-      hoVariations.push(hoNumbers);
+    // 실제 호수 번호만 추출한 값 추가 (1층201호 → 201)
+    const hoNumber = extractHoNumber(hoNm);
+    if (hoNumber !== hoNm.trim() && hoNumber !== '') {
+      hoVariations.push(hoNumber);
     }
     
     // "호" 접미사 제거한 값 추가
     const hoWithoutSuffix = hoNm.trim().replace(/호$/, '');
-    if (hoWithoutSuffix !== hoNm.trim() && hoWithoutSuffix !== hoNumbers) {
+    if (hoWithoutSuffix !== hoNm.trim() && hoWithoutSuffix !== hoNumber) {
       hoVariations.push(hoWithoutSuffix);
     }
   } else {
