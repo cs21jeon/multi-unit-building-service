@@ -19,6 +19,7 @@
   "author": "GoldenRabbit",
   "license": "MIT",
   "dependencies": {
+    "nodemailer": "^6.9.7",
     "airtable": "^0.12.2",
     "axios": "^1.4.0",
     "dotenv": "^16.3.1",
