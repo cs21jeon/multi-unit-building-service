@@ -1214,7 +1214,7 @@ const processMultiUnitBuildingRecord = async (record) => {
   // 재시도 가능 여부 확인
   if (!canRetry(record.id)) {
     logger.info(`⏭️ 레코드 건너뜀 (최대 재시도 횟수 초과): ${record.id}`);
-    return { success: false, skipped: true };  // ← 수정: 객체 반환
+    return { success: false, skipped: true };
   }
 
   try {
@@ -1228,8 +1228,8 @@ const processMultiUnitBuildingRecord = async (record) => {
     const parsedAddress = parseAddress(지번주소);
     if (parsedAddress.error) {
       logger.error(`주소 파싱 실패: ${parsedAddress.error}`);
-      recordRetryAttempt(record.id, false);  // ← 추가: 실패 기록
-      return { success: false, skipped: false };  // ← 수정: 객체 반환
+      recordRetryAttempt(record.id, false);
+      return { success: false, skipped: false };
     }
 
     // 2. 건축물 코드 조회
@@ -1260,6 +1260,18 @@ const processMultiUnitBuildingRecord = async (record) => {
     const apiTime = Date.now() - startTime;
     logger.info(`⚡ API 데이터 수집 완료 (${apiTime}ms)`);
 
+    // ========== 추가: 필수 데이터 검증 ==========
+    // 건축물 기본 정보가 하나도 없으면 실패로 간주
+    const hasBuildingData = (recapData && recapData.response?.body?.totalCount > 0) || 
+                           (titleData && titleData.response?.body?.totalCount > 0);
+    
+    if (!hasBuildingData) {
+      logger.error(`❌ 건축물 기본 정보 조회 실패 - 필수 API 응답 없음`);
+      recordRetryAttempt(record.id, false);
+      return { success: false, skipped: false };
+    }
+    // ========== 끝 ==========
+
     // 5. 데이터 가공
     const processedData = processMultiUnitBuildingData(
       recapData, titleData, areaData, landCharacteristics, housingPrice, landShare, 동, 호수
@@ -1267,8 +1279,8 @@ const processMultiUnitBuildingRecord = async (record) => {
 
     if (Object.keys(processedData).length === 0) {
       logger.warn(`처리된 데이터가 없습니다: ${record.id}`);
-      recordRetryAttempt(record.id, false);  // ← 추가: 실패 기록
-      return { success: false, skipped: false };  // ← 수정: 객체 반환
+      recordRetryAttempt(record.id, false);
+      return { success: false, skipped: false };
     }
 
     // 6. 에어테이블 업데이트
@@ -1282,7 +1294,6 @@ const processMultiUnitBuildingRecord = async (record) => {
 
     // 필수 필드 확인
     const requiredFields = ["주택가격(만원)", "주택가격기준년도", "대지지분(㎡)"];
-    const optionalFields = ["전용면적(㎡)", "공급면적(㎡)"];
     let missingFields = [];
 
     requiredFields.forEach(field => {
@@ -1296,10 +1307,26 @@ const processMultiUnitBuildingRecord = async (record) => {
       logger.info(`누락된 필수 필드를 0으로 설정: ${missingFields.join(', ')}`);
     }
 
+    // ========== 추가: 의미있는 데이터 검증 ==========
+    // 모든 필수 필드가 0이면 의미없는 데이터로 간주
+    const hasValidData = updateData["주택가격(만원)"] > 0 || 
+                        updateData["대지지분(㎡)"] > 0 ||
+                        updateData["전용면적(㎡)"] > 0 ||
+                        updateData["공급면적(㎡)"] > 0 ||
+                        updateData["용도지역"] ||
+                        updateData["주용도"];
+    
+    if (!hasValidData) {
+      logger.error(`❌ 의미있는 데이터 없음 - 모든 주요 필드가 비어있음`);
+      recordRetryAttempt(record.id, false);
+      return { success: false, skipped: false };
+    }
+    // ========== 끝 ==========
+
     if (Object.keys(updateData).length === 0) {
       logger.warn(`업데이트할 유효한 데이터가 없음: ${record.id}`);
-      recordRetryAttempt(record.id, false);  // ← 추가: 실패 기록
-      return { success: false, skipped: false };  // ← 수정: 객체 반환
+      recordRetryAttempt(record.id, false);
+      return { success: false, skipped: false };
     }
 
     logger.info(`📝 업데이트 예정 필드: ${Object.keys(updateData).join(', ')}`);
@@ -1309,12 +1336,12 @@ const processMultiUnitBuildingRecord = async (record) => {
     logger.info(`✅ 에어테이블 업데이트 성공: ${record.id} (총 ${totalTime}ms)`);
     
     recordRetryAttempt(record.id, true);
-    return { success: true, skipped: false };  // ← 수정: 객체 반환
+    return { success: true, skipped: false };
     
   } catch (error) {
     logger.error(`❌ 레코드 처리 실패 ${record.id}:`, error.message);
     recordRetryAttempt(record.id, false);
-    return { success: false, skipped: false };  // ← 수정: 객체 반환
+    return { success: false, skipped: false };
   }
 };
 
