@@ -1441,13 +1441,31 @@ cron.schedule('* * * * *', async () => {
       })
       .all();
 
-    // 뷰에 레코드가 있으면 작업 실행
-    if (sampleRecords.length > 0) {
-      logger.info('🎯 처리할 집합건물 레코드 발견, 작업 실행 중...');
-      await runMultiUnitBuildingJob();
-    } else {
+    if (sampleRecords.length === 0) {
       logger.debug('✅ 처리할 집합건물 레코드 없음, 작업 건너뜀');
+      return;
     }
+
+    // ========== 추가: 모든 레코드가 건너뛴 상태인지 확인 ==========
+    const allSkipped = sampleRecords.every(record => {
+      const recordData = {
+        id: record.id,
+        '지번 주소': record.get('지번 주소') || '',
+        '동': record.get('동') || '',
+        '호수': record.get('호수') || ''
+      };
+      return !canRetry(recordData.id);
+    });
+
+    if (allSkipped) {
+      logger.debug('✅ 모든 레코드가 최대 재시도 횟수 초과 상태, 작업 건너뜀');
+      return;
+    }
+    // ========== 끝 ==========
+
+    logger.info('🎯 처리할 집합건물 레코드 발견, 작업 실행 중...');
+    await runMultiUnitBuildingJob();
+    
   } catch (error) {
     logger.error('❌ 작업 확인 중 오류 발생:', error.message);
   }
