@@ -6,6 +6,7 @@ const Airtable = require('airtable');
 const convert = require('xml-js');
 const path = require('path');
 const fs = require('fs');
+const nodemailer = require('nodemailer');
 
 const app = express();
 const PORT = process.env.MULTI_UNIT_BUILDING_SERVICE_PORT || 3003;
@@ -51,6 +52,128 @@ const logger = {
   warn: (...args) => log('warn', ...args),
   error: (...args) => log('error', ...args)
 };
+
+// 재시도 이력 저장 (메모리)
+const retryHistory = new Map(); // recordId -> { attempts: number, lastAttempt: Date, failed: boolean }
+
+// 이메일 설정 (기존 .env 변수 사용)
+const emailTransporter = nodemailer.createTransport({
+  host: process.env.SMTP_SERVER,
+  port: parseInt(process.env.SMTP_PORT),
+  secure: false, // 587 포트는 STARTTLS 사용
+  auth: {
+    user: process.env.EMAIL_ADDRESS,
+    pass: process.env.EMAIL_PASSWORD
+  }
+});
+
+// 재시도 설정
+const MAX_RETRY_ATTEMPTS = 5;
+const RETRY_RESET_DAYS = 7; // 7일 후 재시도 카운터 리셋
+
+// 재시도 가능 여부 확인
+function canRetry(recordId) {
+  const history = retryHistory.get(recordId);
+  
+  if (!history) {
+    return true; // 첫 시도
+  }
+  
+  // 이미 실패로 마킹된 경우
+  if (history.failed) {
+    // 7일이 지났는지 확인
+    const daysSinceLastAttempt = (Date.now() - history.lastAttempt.getTime()) / (1000 * 60 * 60 * 24);
+    if (daysSinceLastAttempt >= RETRY_RESET_DAYS) {
+      // 카운터 리셋
+      retryHistory.delete(recordId);
+      logger.info(`재시도 카운터 리셋: ${recordId} (${RETRY_RESET_DAYS}일 경과)`);
+      return true;
+    }
+    return false; // 아직 리셋 기간이 안됨
+  }
+  
+  // 최대 시도 횟수 확인
+  return history.attempts < MAX_RETRY_ATTEMPTS;
+}
+
+// 재시도 이력 기록
+function recordRetryAttempt(recordId, success) {
+  const history = retryHistory.get(recordId) || { attempts: 0, lastAttempt: new Date(), failed: false };
+  
+  if (success) {
+    // 성공 시 이력 삭제
+    retryHistory.delete(recordId);
+    logger.info(`✅ 레코드 성공, 재시도 이력 삭제: ${recordId}`);
+  } else {
+    // 실패 시 카운트 증가
+    history.attempts += 1;
+    history.lastAttempt = new Date();
+    
+    // 최대 시도 횟수 도달 시 실패로 마킹
+    if (history.attempts >= MAX_RETRY_ATTEMPTS) {
+      history.failed = true;
+      logger.warn(`❌ 레코드 최대 재시도 횟수 도달: ${recordId} (${history.attempts}회)`);
+    }
+    
+    retryHistory.set(recordId, history);
+    logger.info(`재시도 기록: ${recordId} - 시도 ${history.attempts}/${MAX_RETRY_ATTEMPTS}`);
+  }
+}
+
+// 실패한 레코드 이메일 알림
+async function sendFailureNotification(failedRecords) {
+  if (failedRecords.length === 0) return;
+  
+  try {
+    const recordsList = failedRecords.map(r => 
+      `- ${r['지번 주소']} ${r['동']} ${r['호수']} (레코드 ID: ${r.id})`
+    ).join('\n');
+    
+    const mailOptions = {
+      from: process.env.EMAIL_ADDRESS,  // ← 수정: NOTIFICATION_EMAIL_USER → EMAIL_ADDRESS
+      to: process.env.NOTIFICATION_EMAIL_TO || process.env.EMAIL_ADDRESS,  // ← 수정
+      subject: `[집합건물 서비스] ${failedRecords.length}개 레코드 처리 실패`,
+      text: `
+다음 레코드들이 ${MAX_RETRY_ATTEMPTS}회 재시도 후에도 처리에 실패했습니다:
+
+${recordsList}
+
+총 실패 레코드: ${failedRecords.length}개
+발생 시각: ${new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}
+
+조치 필요:
+1. 에어테이블에서 해당 레코드의 주소 정보 확인
+2. 동/호수 정보가 올바른지 확인
+3. 필요시 수동으로 정보 입력
+
+서비스 관리: http://multi-unit-building.goldenrabbit.biz/
+      `,
+      html: `
+<h2>집합건물 정보 수집 실패 알림</h2>
+<p>다음 레코드들이 <strong>${MAX_RETRY_ATTEMPTS}회 재시도</strong> 후에도 처리에 실패했습니다:</p>
+<ul>
+${failedRecords.map(r => `<li>${r['지번 주소']} ${r['동']} ${r['호수']} <small>(레코드 ID: ${r.id})</small></li>`).join('')}
+</ul>
+<p><strong>총 실패 레코드:</strong> ${failedRecords.length}개</p>
+<p><strong>발생 시각:</strong> ${new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}</p>
+
+<h3>조치 필요</h3>
+<ol>
+<li>에어테이블에서 해당 레코드의 주소 정보 확인</li>
+<li>동/호수 정보가 올바른지 확인</li>
+<li>필요시 수동으로 정보 입력</li>
+</ol>
+
+<p><a href="http://multi-unit-building.goldenrabbit.biz/">서비스 관리 페이지</a></p>
+      `
+    };
+    
+    await emailTransporter.sendMail(mailOptions);
+    logger.info(`📧 실패 알림 이메일 발송 완료: ${failedRecords.length}개 레코드`);
+  } catch (error) {
+    logger.error('📧 이메일 발송 실패:', error.message);
+  }
+}
 
 // 에어테이블 설정
 const airtableBase = new Airtable({
@@ -162,23 +285,9 @@ const formatDateISO = (dateStr) => {
   return date.toISOString();
 };
 
-// 호수에서 실제 호수 번호만 추출하는 함수 (새로 추가)
-const extractHoNumber = (hoStr) => {
-  if (!hoStr || typeof hoStr !== 'string') return '';
-  
-  // "1층201호", "지하1층B102호" 등에서 호수만 추출
-  const hoMatch = hoStr.match(/(\d+)호$/);
-  if (hoMatch) {
-    return hoMatch[1]; // 마지막 숫자호수만 반환 (201호 → 201)
-  }
-  
-  // "호"가 없는 경우 기존 로직 사용
-  return extractNumbersOnly(hoStr);
-};
-
-// 동/호수 처리 유틸리티 함수 수정
+// 동/호수 처리 유틸리티 함수 추가
 const processDongHo = (dongNm, hoNm) => {
-  // 1. 동 처리 (기존과 동일)
+  // 1. 동 처리
   let dongVariations = [];
   if (dongNm && dongNm.trim() !== '') {
     // 원본 값 추가
@@ -199,21 +308,21 @@ const processDongHo = (dongNm, hoNm) => {
     dongVariations.push(''); // 빈 값도 시도
   }
   
-  // 2. 호수 처리 (수정됨)
+  // 2. 호수 처리
   let hoVariations = [];
   if (hoNm && hoNm.trim() !== '') {
     // 원본 값 추가
     hoVariations.push(hoNm.trim());
     
-    // 실제 호수 번호만 추출한 값 추가 (1층201호 → 201)
-    const hoNumber = extractHoNumber(hoNm);
-    if (hoNumber !== hoNm.trim() && hoNumber !== '') {
-      hoVariations.push(hoNumber);
+    // 숫자만 추출한 값 추가 (없으면 빈 문자열)
+    const hoNumbers = extractNumbersOnly(hoNm);
+    if (hoNumbers !== hoNm.trim()) {
+      hoVariations.push(hoNumbers);
     }
     
     // "호" 접미사 제거한 값 추가
     const hoWithoutSuffix = hoNm.trim().replace(/호$/, '');
-    if (hoWithoutSuffix !== hoNm.trim() && hoWithoutSuffix !== hoNumber) {
+    if (hoWithoutSuffix !== hoNm.trim() && hoWithoutSuffix !== hoNumbers) {
       hoVariations.push(hoWithoutSuffix);
     }
   } else {
@@ -1102,24 +1211,31 @@ const processMultiUnitBuildingData = (recapData, titleData, areaData, landCharac
 };
 
 const processMultiUnitBuildingRecord = async (record) => {
+  // 재시도 가능 여부 확인
+  if (!canRetry(record.id)) {
+    logger.info(`⏭️ 레코드 건너뜀 (최대 재시도 횟수 초과): ${record.id}`);
+    return { success: false, skipped: true };  // ← 수정: 객체 반환
+  }
+
   try {
     const 지번주소 = record['지번 주소'];
     const 동 = record['동'] || '';
     const 호수 = record['호수'];
 
-    logger.info(`🏗️ 레코드 처리 시작: ${record.id} - ${지번주소} ${동} ${호수}`);
+    logger.info(`🏗️ 레코드 처리 시작 (시도 ${(retryHistory.get(record.id)?.attempts || 0) + 1}/${MAX_RETRY_ATTEMPTS}): ${record.id} - ${지번주소} ${동} ${호수}`);
 
     // 1. 주소 파싱
     const parsedAddress = parseAddress(지번주소);
     if (parsedAddress.error) {
       logger.error(`주소 파싱 실패: ${parsedAddress.error}`);
-      return false;
+      recordRetryAttempt(record.id, false);  // ← 추가: 실패 기록
+      return { success: false, skipped: false };  // ← 수정: 객체 반환
     }
 
     // 2. 건축물 코드 조회
     const buildingCodes = await getBuildingCodes(parsedAddress);
     
-    // 3. PNU 생성 (VWorld API용)
+    // 3. PNU 생성
     const pnu = generatePNU(buildingCodes);
     logger.info(`📍 생성된 PNU: ${pnu}`);
 
@@ -1128,7 +1244,6 @@ const processMultiUnitBuildingRecord = async (record) => {
     
     const startTime = Date.now();
     
-    // 모든 API를 병렬로 동시 호출
     const [recapData, titleData, areaData, exposData, landCharacteristics, landShare, housingPrice] = await Promise.all([
       getBuildingRecapInfo(buildingCodes),
       getBuildingTitleInfo(buildingCodes),
@@ -1145,43 +1260,36 @@ const processMultiUnitBuildingRecord = async (record) => {
     const apiTime = Date.now() - startTime;
     logger.info(`⚡ API 데이터 수집 완료 (${apiTime}ms)`);
 
-    // 5. 데이터 가공 - housingPrice 올바르게 전달
+    // 5. 데이터 가공
     const processedData = processMultiUnitBuildingData(
       recapData, titleData, areaData, landCharacteristics, housingPrice, landShare, 동, 호수
     );
 
     if (Object.keys(processedData).length === 0) {
       logger.warn(`처리된 데이터가 없습니다: ${record.id}`);
-      return false;
+      recordRetryAttempt(record.id, false);  // ← 추가: 실패 기록
+      return { success: false, skipped: false };  // ← 수정: 객체 반환
     }
 
     // 6. 에어테이블 업데이트
     const updateData = {};
     Object.keys(processedData).forEach(key => {
-      // 숫자 0과 빈 문자열도 유효한 값으로 처리
       const value = processedData[key];
       if (value !== null && value !== undefined) {
         updateData[key] = value;
       }
     });
 
-    // 필수 필드 확인 (전용면적과 공급면적은 예외 처리)
+    // 필수 필드 확인
     const requiredFields = ["주택가격(만원)", "주택가격기준년도", "대지지분(㎡)"];
     const optionalFields = ["전용면적(㎡)", "공급면적(㎡)"];
     let missingFields = [];
 
-    // 필수 필드는 무조건 0으로 설정
     requiredFields.forEach(field => {
       if (updateData[field] === undefined) {
-        updateData[field] = 0; // 없는 필드는 0으로 설정
+        updateData[field] = 0;
         missingFields.push(field);
       }
-    });
-
-    // 선택적 필드는 데이터가 있을 때만 설정 (없으면 건너뜀)
-    optionalFields.forEach(field => {
-      // 이미 updateData에 있으면 아무것도 하지 않음
-      // 없으면 그냥 건너뜀 (0으로 설정하지 않음)
     });
 
     if (missingFields.length > 0) {
@@ -1190,7 +1298,8 @@ const processMultiUnitBuildingRecord = async (record) => {
 
     if (Object.keys(updateData).length === 0) {
       logger.warn(`업데이트할 유효한 데이터가 없음: ${record.id}`);
-      return false;
+      recordRetryAttempt(record.id, false);  // ← 추가: 실패 기록
+      return { success: false, skipped: false };  // ← 수정: 객체 반환
     }
 
     logger.info(`📝 업데이트 예정 필드: ${Object.keys(updateData).join(', ')}`);
@@ -1199,13 +1308,13 @@ const processMultiUnitBuildingRecord = async (record) => {
     const totalTime = Date.now() - startTime;
     logger.info(`✅ 에어테이블 업데이트 성공: ${record.id} (총 ${totalTime}ms)`);
     
-    return true;
+    recordRetryAttempt(record.id, true);
+    return { success: true, skipped: false };  // ← 수정: 객체 반환
+    
   } catch (error) {
     logger.error(`❌ 레코드 처리 실패 ${record.id}:`, error.message);
-    if (error.stack) {
-      logger.debug(`스택 트레이스:`, error.stack);
-    }
-    return false;
+    recordRetryAttempt(record.id, false);
+    return { success: false, skipped: false };  // ← 수정: 객체 반환
   }
 };
 
@@ -1224,10 +1333,9 @@ const runMultiUnitBuildingJob = async () => {
 
     if (allRecords.length === 0) {
       logger.info('✅ 처리할 레코드가 없습니다');
-      return { total: 0, success: 0 };
+      return { total: 0, success: 0, failed: 0, skipped: 0 };  // ← 수정: skipped 추가
     }
 
-    // 뷰에서 가져온 모든 레코드를 처리
     const recordData = allRecords.map(record => ({
       id: record.id,
       '지번 주소': record.get('지번 주소') || '',
@@ -1235,22 +1343,31 @@ const runMultiUnitBuildingJob = async () => {
       '호수': record.get('호수') || ''
     }));
 
-    // 직렬 처리
     logger.info(`⏳ 직렬 처리 시작 (총 ${recordData.length}개)...`);
 
     let successCount = 0;
+    let failedCount = 0;
+    let skippedCount = 0;
+    const newlyFailedRecords = [];
+
     for (let i = 0; i < recordData.length; i++) {
       const record = recordData[i];
       
       try {
         logger.info(`\n📍 [${i + 1}/${recordData.length}] 처리 중: ${record.id}`);
-        const success = await processMultiUnitBuildingRecord(record);
+        const result = await processMultiUnitBuildingRecord(record);  // ← 수정: success → result
         
-        if (success) {
+        if (result.skipped) {  // ← 수정: result 사용
+          skippedCount++;
+        } else if (result.success) {  // ← 수정: result 사용
           successCount++;
-          logger.info(`✅ [${i + 1}/${recordData.length}] 성공: ${record.id}`);
         } else {
-          logger.warn(`❌ [${i + 1}/${recordData.length}] 실패: ${record.id}`);
+          failedCount++;
+          const history = retryHistory.get(record.id);
+          // 새롭게 최대 재시도 횟수에 도달한 레코드만 추가
+          if (history && history.failed && history.attempts === MAX_RETRY_ATTEMPTS) {
+            newlyFailedRecords.push(record);
+          }
         }
 
         // 마지막 레코드가 아니면 대기
@@ -1260,18 +1377,28 @@ const runMultiUnitBuildingJob = async () => {
 
       } catch (error) {
         logger.error(`❌ 레코드 처리 중 예외 발생 ${record.id}:`, error.message);
+        failedCount++;  // ← 추가: 예외 발생 시에도 실패 카운트
       }
     }
 
-    const failedCount = recordData.length - successCount;
+    // 새롭게 실패한 레코드가 있으면 이메일 발송
+    if (newlyFailedRecords.length > 0) {
+      await sendFailureNotification(newlyFailedRecords);
+    }
+
     logger.info(`\n🎉 작업 완료!`);
-    logger.info(`📊 처리 결과: ${recordData.length}개 중 ${successCount}개 성공, ${failedCount}개 실패`);
+    logger.info(`📊 처리 결과: ${recordData.length}개 중 ${successCount}개 성공, ${failedCount}개 실패, ${skippedCount}개 건너뜀`);  // ← 수정
     logger.info(`📈 성공률: ${((successCount / recordData.length) * 100).toFixed(1)}%`);
 
-    return { total: recordData.length, success: successCount, failed: failedCount };
+    return { 
+      total: recordData.length, 
+      success: successCount, 
+      failed: failedCount,
+      skipped: skippedCount  // ← 추가
+    };
   } catch (error) {
     logger.error('❌ 작업 실행 중 오류:', error.message);
-    return { total: 0, success: 0, error: error.message };
+    return { total: 0, success: 0, failed: 0, skipped: 0, error: error.message };  // ← 수정
   }
 };
 
@@ -1511,6 +1638,68 @@ app.get('/', (req, res) => {
     </body>
     </html>
   `);
+});
+
+app.get('/retry-status', (req, res) => {
+  const waiting = [];
+  const maxReached = [];
+  
+  retryHistory.forEach((history, recordId) => {
+    const info = {
+      recordId,
+      attempts: history.attempts,
+      lastAttempt: history.lastAttempt.toISOString(),
+      failed: history.failed
+    };
+    
+    if (history.failed) {
+      maxReached.push(info);
+    } else {
+      waiting.push(info);
+    }
+  });
+  
+  res.json({
+    summary: {
+      totalTracked: retryHistory.size,
+      waiting: waiting.length,
+      maxReached: maxReached.length,
+      maxRetryAttempts: MAX_RETRY_ATTEMPTS,
+      retryResetDays: RETRY_RESET_DAYS
+    },
+    waiting,
+    maxReached
+  });
+});
+
+// 특정 레코드 재시도 이력 리셋 API
+app.post('/reset-retry/:recordId', (req, res) => {
+  const recordId = req.params.recordId;
+  
+  if (retryHistory.has(recordId)) {
+    retryHistory.delete(recordId);
+    logger.info(`🔄 재시도 이력 수동 리셋: ${recordId}`);
+    res.json({ 
+      success: true, 
+      message: `레코드 ${recordId}의 재시도 이력이 리셋되었습니다.` 
+    });
+  } else {
+    res.json({ 
+      success: false, 
+      message: `레코드 ${recordId}의 재시도 이력이 없습니다.` 
+    });
+  }
+});
+
+// 모든 재시도 이력 리셋 API
+app.post('/reset-all-retry', (req, res) => {
+  const count = retryHistory.size;
+  retryHistory.clear();
+  logger.info(`🔄 모든 재시도 이력 수동 리셋: ${count}개`);
+  res.json({ 
+    success: true, 
+    message: `${count}개 레코드의 재시도 이력이 리셋되었습니다.` 
+  });
 });
 
 app.listen(PORT, () => {
