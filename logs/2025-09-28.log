@@ -1,3 +1,0 @@
-[2025-09-28T02:14:31.118Z] [ERROR] ❌ 작업 확인 중 오류 발생: request to https://api.airtable.com/v0/appQkFdB8TdPVNWdz/tblT28nHoneqlbgBh?view=viwOs5jlYkIGPZ142&maxRecords=3 failed, reason: connect ETIMEDOUT 54.196.238.48:443
-[2025-09-28T02:14:33.157Z] [ERROR] ❌ 작업 확인 중 오류 발생: request to https://api.airtable.com/v0/appQkFdB8TdPVNWdz/tblT28nHoneqlbgBh?view=viwOs5jlYkIGPZ142&maxRecords=3 failed, reason: connect ETIMEDOUT 54.196.238.48:443
-[2025-09-28T15:00:00.510Z] [INFO] 오래된 로그 파일 1개 삭제 완료
